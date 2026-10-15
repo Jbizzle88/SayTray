@@ -1,0 +1,11 @@
+piper-tts
+regex
+numpy
+sounddevice
+audiotsm
+pystray
+pillow
+keyboard
+pyperclip
+comtypes
+faster-whisper

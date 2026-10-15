@@ -1,0 +1,5 @@
+To build it, run this:
+```bash
+swift build -c release && ./build.sh
+```
+Then open `~/Applications/SpeakBar.app` and check main.swift for the `AppDelegate` class. The function `foo_bar(x: Int) -> String` returns {"ok": true}.

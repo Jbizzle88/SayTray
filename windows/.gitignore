@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/stage*/
+.DS_Store
+*.swp

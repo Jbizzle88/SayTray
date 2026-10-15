@@ -1,0 +1,23 @@
+# Build / package intermediates
+.build/
+**/build/
+**/dist/stage*/
+**/*.app/
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+**/._*
+*.swp
+
+# Runtime / secrets / heavy assets (never commit)
+**/.venv/
+**/venv/
+**/*.onnx
+**/*.onnx.json
+**/voices/
+**/Logs/
+**/*.log
+**/*.p12
+**/*.pem
+**/*.key
+**/login.keychain*

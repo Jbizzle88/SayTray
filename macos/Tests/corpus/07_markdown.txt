@@ -1,0 +1,12 @@
+# SpeakBar Notes
+## Overview
+**SpeakBar** is a *menu bar* app. See [the docs](https://example.com/docs) for ~~old~~ new details.
+> Quoted text appears here as a block quote.
+
+| Feature | Status |
+|---------|--------|
+| Piper   | Done   |
+| Dictation | Done |
+
+---
+Final paragraph after the table.

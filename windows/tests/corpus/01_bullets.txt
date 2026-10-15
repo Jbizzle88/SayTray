@@ -1,0 +1,7 @@
+Here is what changed in this release
+- Faster startup when reading long text
+- Fixed a crash with Bluetooth headsets
+• Smart “quotes” and ‘apostrophes’ — plus dashes… and ellipses
+* Nested bullet without punctuation
+1. First numbered step
+2) Second numbered step
