@@ -1,0 +1,1164 @@
+[
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\01_bullets.txt",
+  "complete": true,
+  "seconds_total": 5.075140476226807,
+  "first_chunk_ready": 0.6790652275085449,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "Here is what changed in this release.",
+    "words": 7,
+    "phonemes": 26,
+    "attempts": [
+     {
+      "seconds": 1.6602267573696146,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Faster startup when reading long text.",
+    "words": 6,
+    "phonemes": 28,
+    "attempts": [
+     {
+      "seconds": 2.043356009070295,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Fixed a crash with Bluetooth headsets.",
+    "words": 6,
+    "phonemes": 26,
+    "attempts": [
+     {
+      "seconds": 2.089795918367347,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Smart quotes and 'apostrophes', plus dashes, and ellipses.",
+    "words": 8,
+    "phonemes": 43,
+    "attempts": [
+     {
+      "seconds": 3.7616326530612243,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-004-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "005",
+    "text": "Nested bullet without punctuation.",
+    "words": 4,
+    "phonemes": 29,
+    "attempts": [
+     {
+      "seconds": 1.822766439909297,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-005-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "006",
+    "text": "First numbered step.",
+    "words": 3,
+    "phonemes": 14,
+    "attempts": [
+     {
+      "seconds": 0.9752380952380952,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-006-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "007",
+    "text": "Second numbered step.",
+    "words": 3,
+    "phonemes": 16,
+    "attempts": [
+     {
+      "seconds": 1.1609977324263039,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\1\\r1000-007-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\02_code.txt",
+  "complete": true,
+  "seconds_total": 4.320074796676636,
+  "first_chunk_ready": 0.5581531524658203,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "To build it, run this.",
+    "words": 5,
+    "phonemes": 14,
+    "attempts": [
+     {
+      "seconds": 1.3815873015873017,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\2\\r1001-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Code block omitted.",
+    "words": 3,
+    "phonemes": 15,
+    "attempts": [
+     {
+      "seconds": 1.0681179138321995,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\2\\r1001-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Then open Applications slash SpeakBar dot app and check main dot swift for the AppDelegate class.",
+    "words": 16,
+    "phonemes": 73,
+    "attempts": [
+     {
+      "seconds": 5.421859410430839,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\2\\r1001-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "The function foo bar(x: Int), String returns ok: true.",
+    "words": 9,
+    "phonemes": 39,
+    "attempts": [
+     {
+      "seconds": 3.7848526077097504,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\2\\r1001-004-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\03_urls.txt",
+  "complete": true,
+  "seconds_total": 4.460941553115845,
+  "first_chunk_ready": 2.9191441535949707,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "Docs are at example dot com and the repo is at github dot com slash jon slash speakbar.",
+    "words": 18,
+    "phonemes": 67,
+    "attempts": [
+     {
+      "seconds": 2.8560544217687074,
+      "verdict": "too fast for its phonemes (skipped speech)"
+     }
+    ],
+    "events": [
+     "too fast for its phonemes (skipped speech) (2.86s, 67 phonemes, 0.043 s/phoneme, 0.159 s/word); splitting into 2 parts with lower noise"
+    ],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\3\\r1002-001s0-a0.wav",
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\3\\r1002-001s1-a0.wav"
+    ],
+    "subs": [
+     {
+      "key": "001s0",
+      "text": "Docs are at example dot com and the repo",
+      "words": 9,
+      "phonemes": 32,
+      "attempts": [
+       {
+        "seconds": 2.5541950113378684,
+        "verdict": "ok"
+       }
+      ],
+      "events": [],
+      "items": [
+       "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\3\\r1002-001s0-a0.wav"
+      ],
+      "subs": []
+     },
+     {
+      "key": "001s1",
+      "text": "is at github dot com slash jon slash speakbar.",
+      "words": 9,
+      "phonemes": 35,
+      "attempts": [
+       {
+        "seconds": 2.647074829931973,
+        "verdict": "ok"
+       }
+      ],
+      "events": [],
+      "items": [
+       "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\3\\r1002-001s1-a0.wav"
+      ],
+      "subs": []
+     }
+    ]
+   },
+   {
+    "key": "002",
+    "text": "Email me at jon dot becherer at example dot com or visit apple dot com for details (see developer dot apple dot com).",
+    "words": 23,
+    "phonemes": 91,
+    "attempts": [
+     {
+      "seconds": 4.1099319727891155,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\3\\r1002-002-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\04_numbers.txt",
+  "complete": true,
+  "seconds_total": 11.243796348571777,
+  "first_chunk_ready": 1.7253713607788086,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "The meeting is on 10 slash 14 slash 2026 at 3:30 PM.",
+    "words": 12,
+    "phonemes": 61,
+    "attempts": [
+     {
+      "seconds": 4.876190476190477,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\4\\r1003-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "It costs 1,299.99 dollars, or about 1,150 euros, a 15 percent discount.",
+    "words": 12,
+    "phonemes": 114,
+    "attempts": [
+     {
+      "seconds": 7.22140589569161,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\4\\r1003-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Version 2.0.1 fixed 3 bugs; CPU usage dropped from 87.5 percent to 12 percent.",
+    "words": 14,
+    "phonemes": 96,
+    "attempts": [
+     {
+      "seconds": 6.815056689342404,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\4\\r1003-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Call 555-0142 ext. 7, temperature 72 degrees F, ratio 16:9, score 3-2, and number 42 in the queue.",
+    "words": 18,
+    "phonemes": 134,
+    "attempts": [
+     {
+      "seconds": 10.692789115646258,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\4\\r1003-004-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\05_emoji.txt",
+  "complete": true,
+  "seconds_total": 2.7446038722991943,
+  "first_chunk_ready": 0.7875497341156006,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "Great news everyone the launch went really well!",
+    "words": 8,
+    "phonemes": 34,
+    "attempts": [
+     {
+      "seconds": 2.043356009070295,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\5\\r1004-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Thanks to the whole team and especially to Sam.",
+    "words": 9,
+    "phonemes": 32,
+    "attempts": [
+     {
+      "seconds": 2.380045351473923,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\5\\r1004-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Next up: testing on more devices to then shipping.",
+    "words": 9,
+    "phonemes": 36,
+    "attempts": [
+     {
+      "seconds": 2.8328344671201813,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\5\\r1004-003-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\06_glued.txt",
+  "complete": true,
+  "seconds_total": 4.522374391555786,
+  "first_chunk_ready": 1.3179993629455566,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "I couldn't hear it myself, so give Option plus a try and let me know.",
+    "words": 15,
+    "phonemes": 51,
+    "attempts": [
+     {
+      "seconds": 3.4597732426303853,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\6\\r1005-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "If the background voice ever stalls, SpeakBar now restarts it and tries again on its own.",
+    "words": 16,
+    "phonemes": 65,
+    "attempts": [
+     {
+      "seconds": 4.818140589569161,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\6\\r1005-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "It also reads links.",
+    "words": 4,
+    "phonemes": 16,
+    "attempts": [
+     {
+      "seconds": 1.4512471655328798,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\6\\r1005-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Try it now!",
+    "words": 3,
+    "phonemes": 9,
+    "attempts": [
+     {
+      "seconds": 0.6849886621315193,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\6\\r1005-004-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "005",
+    "text": "Does it work? Yes.",
+    "words": 4,
+    "phonemes": 11,
+    "attempts": [
+     {
+      "seconds": 1.0797278911564625,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\6\\r1005-005-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\07_markdown.txt",
+  "complete": true,
+  "seconds_total": 5.041257858276367,
+  "first_chunk_ready": 0.7548940181732178,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "SpeakBar Notes. Overview.",
+    "words": 3,
+    "phonemes": 19,
+    "attempts": [
+     {
+      "seconds": 1.9272562358276644,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\7\\r1006-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "SpeakBar is a menu bar app.",
+    "words": 6,
+    "phonemes": 20,
+    "attempts": [
+     {
+      "seconds": 1.8808163265306121,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\7\\r1006-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "See the docs for old new details.",
+    "words": 7,
+    "phonemes": 24,
+    "attempts": [
+     {
+      "seconds": 1.811156462585034,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\7\\r1006-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Quoted text appears here as a block quote. Feature, Status. Piper, Done. Dictation, Done.",
+    "words": 14,
+    "phonemes": 63,
+    "attempts": [
+     {
+      "seconds": 5.642448979591837,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\7\\r1006-004-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "005",
+    "text": "Final paragraph after the table.",
+    "words": 5,
+    "phonemes": 26,
+    "attempts": [
+     {
+      "seconds": 1.7298866213151927,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\7\\r1006-005-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\08_chat.txt",
+  "complete": true,
+  "seconds_total": 13.298599004745483,
+  "first_chunk_ready": 1.2890527248382568,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "I fixed the gibberish, and SpeakBar is rebuilt and running.",
+    "words": 10,
+    "phonemes": 43,
+    "attempts": [
+     {
+      "seconds": 3.0998639455782313,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Line breaks were getting merged, so things like bullet lists reached Piper as one giant run-on sentence.",
+    "words": 17,
+    "phonemes": 78,
+    "attempts": [
+     {
+      "seconds": 5.12,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Piper babbles on input that long and then skips ahead.",
+    "words": 10,
+    "phonemes": 39,
+    "attempts": [
+     {
+      "seconds": 2.809614512471655,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Now SpeakBar cleans up the text and feeds Piper short sentences one at a time.",
+    "words": 15,
+    "phonemes": 59,
+    "attempts": [
+     {
+      "seconds": 4.562721088435374,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-004-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "005",
+    "text": "It also reads links as a link to example dot com and says symbols like and and percent as words.",
+    "words": 20,
+    "phonemes": 74,
+    "attempts": [
+     {
+      "seconds": 4.667210884353741,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-005-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "006",
+    "text": "A one-minute test with bullets, links, and a long run-on sentence came out clean and the right length, though I checked it with a script, not by ear.",
+    "words": 28,
+    "phonemes": 100,
+    "attempts": [
+     {
+      "seconds": 7.592925170068027,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-006-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "007",
+    "text": "Try reading something long and let me know how it sounds.",
+    "words": 11,
+    "phonemes": 40,
+    "attempts": [
+     {
+      "seconds": 2.6122448979591835,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-007-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "008",
+    "text": "You won't need to re-grant permissions this time, since the new signing kept them.",
+    "words": 14,
+    "phonemes": 55,
+    "attempts": [
+     {
+      "seconds": 3.610702947845805,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\8\\r1007-008-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\09_runon.txt",
+  "complete": true,
+  "seconds_total": 10.569323301315308,
+  "first_chunk_ready": 3.4962902069091797,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "This final sentence is deliberately very long and has no periods for a long time because people sometimes copy text from web pages where a single line runs on and on with commas,",
+    "words": 33,
+    "phonemes": 139,
+    "attempts": [
+     {
+      "seconds": 9.601451247165533,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\9\\r1008-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "clauses, and conjunctions, and the reader should still handle it gracefully by splitting it at sensible clause boundaries instead of sending one enormous chunk to the neural voice which is exactly the,",
+    "words": 32,
+    "phonemes": 148,
+    "attempts": [
+     {
+      "seconds": 9.729160997732427,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\9\\r1008-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "kind of input that makes it start to babble and then jump ahead past words that it never actually spoke out loud to the listener who is trying to follow along with what is being read to them right, now.",
+    "words": 40,
+    "phonemes": 146,
+    "attempts": [
+     {
+      "seconds": 9.438911564625851,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\9\\r1008-003-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\10_unicode.txt",
+  "complete": true,
+  "seconds_total": 3.793130874633789,
+  "first_chunk_ready": 1.0286622047424316,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "Zero width joiners and softhyphens appear here.",
+    "words": 7,
+    "phonemes": 36,
+    "attempts": [
+     {
+      "seconds": 2.6354648526077096,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\10\\r1009-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Non breaking spaces too.",
+    "words": 4,
+    "phonemes": 19,
+    "attempts": [
+     {
+      "seconds": 1.4164172335600906,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\10\\r1009-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Line separator next.",
+    "words": 3,
+    "phonemes": 18,
+    "attempts": [
+     {
+      "seconds": 1.2770975056689342,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\10\\r1009-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Tabs and bells.",
+    "words": 3,
+    "phonemes": 11,
+    "attempts": [
+     {
+      "seconds": 1.0913378684807256,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\10\\r1009-004-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "005",
+    "text": "Fullwidth ABC and ligature fine and 1 circled.",
+    "words": 8,
+    "phonemes": 39,
+    "attempts": [
+     {
+      "seconds": 3.239183673469388,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\10\\r1009-005-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\11_short.txt",
+  "complete": true,
+  "seconds_total": 1.2629222869873047,
+  "first_chunk_ready": 0.6265180110931396,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "OK. Yes! No. Hi there.",
+    "words": 5,
+    "phonemes": 17,
+    "attempts": [
+     {
+      "seconds": 1.5325170068027212,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\11\\r1010-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Thanks a lot for everything you did today.",
+    "words": 8,
+    "phonemes": 29,
+    "attempts": [
+     {
+      "seconds": 1.5209070294784581,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\11\\r1010-002-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\corpus\\12_prose.txt",
+  "complete": true,
+  "seconds_total": 7.997256278991699,
+  "first_chunk_ready": 2.2891979217529297,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "The old lighthouse stood at the edge of the cliff, its paint peeling in long white strips after decades of salt and wind.",
+    "words": 23,
+    "phonemes": 87,
+    "attempts": [
+     {
+      "seconds": 6.130068027210885,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\12\\r1011-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Every evening, the keeper climbed the spiral stairs, counted the steps out of habit, and lit the lamp that had guided ships for more than a century.",
+    "words": 27,
+    "phonemes": 107,
+    "attempts": [
+     {
+      "seconds": 7.244625850340136,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\12\\r1011-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Nobody remembered exactly when the last ship had needed it, but the keeper never missed a night.",
+    "words": 17,
+    "phonemes": 67,
+    "attempts": [
+     {
+      "seconds": 4.458231292517007,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\12\\r1011-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Someone might be out there, she would say, and that was reason enough.",
+    "words": 13,
+    "phonemes": 45,
+    "attempts": [
+     {
+      "seconds": 3.5874829931972787,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\12\\r1011-004-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ },
+ {
+  "file": "C:\\Users\\Jon\\Developer\\SpeakBar-Windows\\tests\\past\\chat_babble_report.txt",
+  "complete": true,
+  "seconds_total": 12.847541809082031,
+  "first_chunk_ready": 1.1298785209655762,
+  "chunks": [
+   {
+    "key": "001",
+    "text": "I fixed the gibberish, and SpeakBar is rebuilt and running.",
+    "words": 10,
+    "phonemes": 43,
+    "attempts": [
+     {
+      "seconds": 2.948934240362812,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-001-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "002",
+    "text": "Line breaks were getting merged, so things like bullet lists reached Piper as one giant run-on sentence.",
+    "words": 17,
+    "phonemes": 78,
+    "attempts": [
+     {
+      "seconds": 5.073560090702948,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-002-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "003",
+    "text": "Piper babbles on input that long and then skips ahead.",
+    "words": 10,
+    "phonemes": 39,
+    "attempts": [
+     {
+      "seconds": 2.8676643990929707,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-003-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "004",
+    "text": "Now SpeakBar cleans up the text and feeds Piper short sentences one at a time.",
+    "words": 15,
+    "phonemes": 59,
+    "attempts": [
+     {
+      "seconds": 4.725260770975057,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-004-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "005",
+    "text": "It also reads links as a link to example dot com and says symbols like and and percent as words.",
+    "words": 20,
+    "phonemes": 74,
+    "attempts": [
+     {
+      "seconds": 4.85297052154195,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-005-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "006",
+    "text": "A one-minute test with bullets, links, and a long run-on sentence came out clean and the right length, though I checked it with a script, not by ear.",
+    "words": 28,
+    "phonemes": 100,
+    "attempts": [
+     {
+      "seconds": 7.48843537414966,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-006-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "007",
+    "text": "Try reading something long and let me know how it sounds.",
+    "words": 11,
+    "phonemes": 40,
+    "attempts": [
+     {
+      "seconds": 2.6354648526077096,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-007-a0.wav"
+    ],
+    "subs": []
+   },
+   {
+    "key": "008",
+    "text": "You won't need to re-grant permissions this time, since the new signing kept them.",
+    "words": 14,
+    "phonemes": 55,
+    "attempts": [
+     {
+      "seconds": 3.5294331065759637,
+      "verdict": "ok"
+     }
+    ],
+    "events": [],
+    "items": [
+     "C:\\Users\\Jon\\AppData\\Local\\Temp\\speakbar-pipeline-test\\13\\r1012-008-a0.wav"
+    ],
+    "subs": []
+   }
+  ]
+ }
+]

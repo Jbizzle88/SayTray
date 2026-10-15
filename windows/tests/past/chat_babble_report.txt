@@ -1,0 +1,3 @@
+I fixed the gibberish, and SpeakBar is rebuilt and running. Line breaks were getting merged, so things like bullet lists reached Piper as one giant run-on sentence.Piper babbles on input that long and then skips ahead. Now SpeakBar cleans up the text and feeds Piper short sentences one at a time. It also reads links as “a link to example.com” and says symbols like & and % as words.
+
+A one-minute test with bullets, links, and a long run-on sentence came out clean and the right length, though I checked it with a script, not by ear. Try reading something long and let me know how it sounds. You won't need to re-grant permissions this time, since the new signing kept them.
