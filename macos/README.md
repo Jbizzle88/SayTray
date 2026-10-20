@@ -99,7 +99,7 @@ Optional: `defaults delete com.jonbecherer.saytray`
 ## Notes
 
 - Piper voices live in `~/Library/Application Support/SayTray/piper/` (about **170 MB** for the two default voices, plus the venv; optional voices are extra). They are **not** inside the zip so the download stays small.
-- **Voices:** Norman (medium, default, male US), LJSpeech (high, female US). Optional, from Settings: Kristin (medium), John (medium), Cori (high, UK), LibriTTS (high, speakers 0 female / 2 male / 4 female), Bryce (medium), and Jenny (Dioco).
+- **Voices:** Norman (medium, default, male US), LJSpeech (high, female US). Optional, from Settings: Kristin (medium), John (medium), Cori (high, UK), LibriTTS (high; Speaker 1 (Female), Speaker 2 (Male), Speaker 3 (Female)), Bryce (medium), and Jenny (Dioco).
 - If Piper isn’t set up, SayTray falls back to a macOS system voice.
 - Logs: `~/Library/Logs/SayTray/` (`events.log`, `guard.log`, `helper.log`, `last/`).
 

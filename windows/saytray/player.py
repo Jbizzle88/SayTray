@@ -110,8 +110,10 @@ class Player:
             with self._buf_lock:
                 self._buf.append((gen, a, 0))
                 # do not bump _pending_markers: chimes must not block "idle" / speech pump
+            return True
         except Exception as e:
             logs.event(f"chime error: {e!r}")
+            return False
 
     def new_generation(self):
         self._gen += 1

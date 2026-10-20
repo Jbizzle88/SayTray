@@ -64,30 +64,10 @@ def _run(settings, on_saved, test_speak):
             bf.grid(row=i + 1, column=2, sticky="e")
             buttons[vid] = bf
 
-        speaker_row = ttk.Frame(f)
-        speaker_row.grid(row=r, column=0, columnspan=2, sticky="we", pady=4)
-        r += 1
-        ttk.Label(speaker_row, text="LibriTTS speaker").pack(side="left")
         speaker_v = tk.StringVar()
-        speaker_box = ttk.Combobox(speaker_row, textvariable=speaker_v, state="readonly", width=24)
-        speaker_box.pack(side="left", padx=8)
-
-        def sync_speaker(*_):
-            v = by_id(voice_v.get())
-            sps = (v or {}).get("speakers") or []
-            if not sps:
-                speaker_row.grid_remove()
-                return
-            speaker_row.grid()
-            speaker_box["values"] = [s["label"] for s in sps]
-            want = normalize_speaker(v["id"], settings.data.get("speaker"))
-            label = next((s["label"] for s in sps if s["id"] == want), sps[0]["label"])
-            if speaker_v.get() not in speaker_box["values"]:
-                speaker_v.set(label)
 
         def choose(vid):
             voice_v.set(vid)
-            sync_speaker()
 
         def start_download(vid):
             downloads.start(vid)
@@ -102,7 +82,6 @@ def _run(settings, on_saved, test_speak):
                 messagebox.showerror("SayTray", str(e))
                 return
             voice_v.set(settings["voice"])
-            sync_speaker()
 
         button_mode = {}
 
@@ -135,6 +114,15 @@ def _run(settings, on_saved, test_speak):
                 for child in bf.winfo_children():
                     child.destroy()
                 if mode in ("selected", "installed"):
+                    sps = v.get("speakers") or []
+                    if sps:
+                        labels = [s["label"] for s in sps]
+                        box = ttk.Combobox(bf, textvariable=speaker_v, state="readonly", width=22, values=labels)
+                        box.pack(side="left", padx=(0, 4))
+                        if speaker_v.get() not in labels:
+                            want = normalize_speaker(vid, settings.data.get("speaker"))
+                            speaker_v.set(next((s["label"] for s in sps if s["id"] == want), labels[0]))
+                        box.bind("<<ComboboxSelected>>", lambda _e, vid=vid: choose(vid))
                     if mode != "selected":
                         ttk.Button(bf, text="Use", width=8, command=lambda vid=vid: choose(vid)).pack(side="left")
                     ttk.Button(bf, text="Delete", width=8, command=lambda vid=vid: do_delete(vid)).pack(side="left", padx=2)
@@ -160,7 +148,7 @@ def _run(settings, on_saved, test_speak):
         row("", ttk.Checkbutton(f, text="Start with Windows", variable=start_v))
         chime_v = tk.BooleanVar(value=bool(settings["chime"]))
         row("", ttk.Checkbutton(f, text="Play chime when dictation starts and stops", variable=chime_v))
-        ttk.Label(f, text="Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor.",
+        ttk.Label(f, text="Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor. You can keep holding the modifier and press the key again.",
                   foreground="#666").grid(row=r, column=0, columnspan=2, sticky="w"); r += 1
 
         def speaker_id():
@@ -183,7 +171,6 @@ def _run(settings, on_saved, test_speak):
         ttk.Button(bf, text="Test voice", command=lambda: (save(False), test_speak("Hello Jon. This is SayTray, reading at the current speed."))).pack(side="left", padx=4)
         ttk.Button(bf, text="Save", command=save).pack(side="left", padx=4)
         ttk.Button(bf, text="Cancel", command=root.destroy).pack(side="left")
-        sync_speaker()
         paint()
         root.attributes("-topmost", True); root.after(300, lambda: root.attributes("-topmost", False))
         root.mainloop()

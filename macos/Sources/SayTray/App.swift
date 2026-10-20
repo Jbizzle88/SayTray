@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   private func registerHotKeys() {
     HotKeyCenter.shared.set(id: 1, key: st.readKey, down: { [weak self] in self?.readSelection() })
-    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() })
+    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() }, hold: true)
   }
 
   @objc private func readSelection() {

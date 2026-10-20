@@ -4,6 +4,10 @@ set -uo pipefail
 cd "$(dirname "$0")"
 python3 ../windows/tests/test_voices.py
 VOICES=$?
+python3 ../windows/tests/test_chord.py
+VOICES=$((VOICES || $?))
+python3 ../windows/tests/test_setup_venv.py
+VOICES=$((VOICES || $?))
 swift build -c release --product TextPrepTests >/dev/null && "$(swift build -c release --show-bin-path)/TextPrepTests" Tests/corpus "$@"
 UNIT=$?
 mkdir -p build/past

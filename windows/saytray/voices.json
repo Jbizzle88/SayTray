@@ -110,15 +110,15 @@
       "speakers": [
         {
           "id": 0,
-          "label": "0 - female"
+          "label": "Speaker 1 (Female)"
         },
         {
           "id": 2,
-          "label": "2 - male"
+          "label": "Speaker 2 (Male)"
         },
         {
           "id": 4,
-          "label": "4 - female"
+          "label": "Speaker 3 (Female)"
         }
       ],
       "files": [

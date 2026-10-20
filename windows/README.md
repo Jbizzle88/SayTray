@@ -76,7 +76,7 @@ Debug drop files: `%LOCALAPPDATA%\SayTray\debug` (`speak.txt`, `dictate_start`, 
 
 - Clipboard restore after “read selection” is plain text only (images/rich content may be lost).
 - If Piper fails, or the selected voice is not downloaded, SayTray uses Norman when that file is installed, then a Windows SAPI voice.
-- **Voices:** Norman (medium, default, male US), LJSpeech (high, female US). Optional: Kristin (medium), John (medium), Cori (high, UK), LibriTTS (high, speakers 0 female / 2 male / 4 female), Bryce (medium), and Jenny (Dioco). Sizes are shown next to voices that are not downloaded yet.
+- **Voices:** Norman (medium, default, male US), LJSpeech (high, female US). Optional: Kristin (medium), John (medium), Cori (high, UK), LibriTTS (high; Speaker 1 (Female), Speaker 2 (Male), Speaker 3 (Female)), Bryce (medium), and Jenny (Dioco). Sizes are shown next to voices that are not downloaded yet.
 
 ## License / credits
 

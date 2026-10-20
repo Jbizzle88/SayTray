@@ -38,16 +38,45 @@ if ((Test-Path $OldR) -and ($OldR -ne $R)) {
 
 New-Item -ItemType Directory -Force "$R\voices", "$R\Logs", "$R\app", "$R\debug" | Out-Null
 
-# 1. Python venv + dependencies
+# 1. Python venv + dependencies. A moved venv (SpeakBar → SayTray) can leave python.exe
+# or pip.exe pointing at the old path; recreate it instead of continuing.
+function Test-VenvHealthy([string]$Root) {
+  $python = Join-Path $Root "Scripts\python.exe"
+  $pip = Join-Path $Root "Scripts\pip.exe"
+  if (!(Test-Path $python)) { return $false }
+  try {
+    & $python -c "import sys" 1>$null 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    if (Test-Path $pip) {
+      & $pip --version 1>$null 2>$null
+      if ($LASTEXITCODE -ne 0) { return $false }
+    }
+    & $python -m pip --version 1>$null 2>$null
+    return $LASTEXITCODE -eq 0
+  } catch {
+    return $false
+  }
+}
+
 $py = (Get-Command py -ErrorAction SilentlyContinue)
-if (!(Test-Path "$R\venv\Scripts\python.exe")) {
+$venv = Join-Path $R "venv"
+if ((Test-Path $venv) -and -not (Test-VenvHealthy $venv)) {
+  Write-Host "Piper venv is broken (python or pip is not runnable). Recreating it…"
+  Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*SayTray*" -or $_.CommandLine -like "*SpeakBar*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Milliseconds 500
+  Remove-Item -Recurse -Force $venv
+}
+if (!(Test-Path "$venv\Scripts\python.exe")) {
   Write-Host "Creating venv…"
-  if ($py) { & py -3 -m venv "$R\venv" } else { & python -m venv "$R\venv" }
+  if ($py) { & py -3 -m venv $venv } else { & python -m venv $venv }
+  if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
 }
 if (!$SkipDeps) {
   Write-Host "Installing Python packages (piper-tts, faster-whisper, …)…"
-  & "$R\venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q --upgrade pip
-  & "$R\venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r "$Src\requirements.txt"
+  & "$venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q --upgrade pip
+  & "$venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r "$Src\requirements.txt"
   if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 }
 

@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 
 enum PlayItem { case file(URL), system(String) }
@@ -68,8 +69,39 @@ final class Player: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate
 
 /// Short dictation start/stop tones (kept off the speech queue so they never block a read).
 enum Chime {
+  /// How long dictation waits after a successful start chime before opening the mic.
+  static let leadIn: TimeInterval = 0.16
   private static var player: AVAudioPlayer?
-  static func play(_ kind: String) {
+  private static var sound: NSSound?
+
+  /// Plays the tone. NSSound is not tied to the capture engine, so the chime is audible
+  /// even when a microphone session is about to start. Returns false if nothing started.
+  @discardableResult
+  static func play(_ kind: String) -> Bool {
+    let data = wav(kind)
+    if let s = NSSound(data: data) {
+      s.volume = 1
+      sound = s
+      if s.play() { return true }
+      Log.event("chime \(kind): NSSound.play() returned false")
+    } else {
+      Log.event("chime \(kind): NSSound could not read WAV")
+    }
+    do {
+      let p = try AVAudioPlayer(data: data)
+      p.volume = 1
+      player = p
+      p.prepareToPlay()
+      if p.play() { return true }
+      Log.event("chime \(kind): AVAudioPlayer.play() returned false")
+      return false
+    } catch {
+      Log.event("chime error: \(error)")
+      return false
+    }
+  }
+
+  private static func wav(_ kind: String) -> Data {
     let start = kind == "start"
     let sr = 22050
     let dur = start ? 0.12 : 0.10
@@ -94,13 +126,6 @@ enum Chime {
     u32(16); u16(1); u16(1); u32(UInt32(sr)); u32(UInt32(sr * 2)); u16(2); u16(16)
     data.append(contentsOf: Array("data".utf8)); u32(bytes)
     for s in samples { u16(UInt16(bitPattern: s)) }
-    do {
-      let p = try AVAudioPlayer(data: data)
-      p.volume = 1
-      player = p
-      p.prepareToPlay(); p.play()
-    } catch {
-      Log.event("chime error: \(error)")
-    }
+    return data
   }
 }
