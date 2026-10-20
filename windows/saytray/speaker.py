@@ -4,6 +4,7 @@ from .textprep import chunks as prep_chunks
 from .session import ReadSession
 from .engine import PiperEngine
 from .player import Player
+from .voices import installed_ids, normalize_speaker, playback_voice
 from . import logs
 
 
@@ -20,8 +21,21 @@ class Speaker:
         self._lock = threading.RLock()
         self.on_state = None
 
+    def _prepare(self):
+        """Point the engine at the saved voice, or Norman when that file is missing."""
+        requested = self.settings["voice"]
+        chosen = playback_voice(requested, installed_ids())
+        if not chosen:
+            return False
+        if chosen != requested:
+            logs.event(f"voice {requested} unavailable; using {chosen}")
+            self.engine.speaker_id = None
+        else:
+            self.engine.speaker_id = normalize_speaker(chosen, self.settings.data.get("speaker"))
+        return self.engine.ensure(chosen)
+
     def warm_up(self):
-        self.engine.ensure(self.settings["voice"])
+        self._prepare()
 
     @property
     def speaking(self):
@@ -44,7 +58,7 @@ class Speaker:
                         f"--- SCALARS ---\n{scal}\n--- CHUNKS ---\n" + "\n".join(f"{i + 1:03d}: {c}" for i, c in enumerate(cs)) + "\n")
             self.player.play_log = os.path.join(d, "play.log")
             self._gen = self.player.new_generation()
-            use_piper = self.engine.ensure(self.settings["voice"])
+            use_piper = self._prepare()
             s = ReadSession(self._read, cs, d, self.engine if use_piper else None)
             s.on_update = self._on_update
             self._session, self._next = s, 0

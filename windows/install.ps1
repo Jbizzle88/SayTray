@@ -51,18 +51,34 @@ if (!$SkipDeps) {
   if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 }
 
-# 2. Piper voices (same four as the Mac version) — skip with -SkipVoices for a smaller/faster reinstall
+# 2. Default Piper voices from saytray\voices.json (Norman + LJSpeech). Optional voices download in the app.
 if (!$SkipVoices) {
-  $B = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US"
-  Write-Host "Ensuring Piper voices (≈360 MB first time)…"
-  foreach ($v in "lessac/high/en_US-lessac-high", "amy/medium/en_US-amy-medium", "ryan/high/en_US-ryan-high", "libritts_r/medium/en_US-libritts_r-medium") {
-    $n = Split-Path $v -Leaf
-    foreach ($e in "onnx", "onnx.json") {
-      $o = "$R\voices\$n.$e"
+  $catalogPath = Join-Path $Src "saytray\voices.json"
+  if (!(Test-Path $catalogPath)) { throw "Missing voice catalog: $catalogPath" }
+  $catalog = [System.IO.File]::ReadAllText($catalogPath) | ConvertFrom-Json
+  $defaults = @($catalog.voices | Where-Object { $_.installByDefault })
+  $bytes = 0
+  foreach ($v in $defaults) { foreach ($file in @($v.files)) { $bytes += [int64]$file.sizeBytes } }
+  $mb = [int][math]::Round($bytes / 1MB)
+  Write-Host "Ensuring Piper voices (about $mb MB the first time)…"
+  foreach ($id in @($catalog.removed)) {
+    foreach ($ext in @(".onnx", ".onnx.json")) {
+      $old = Join-Path "$R\voices" ($id + $ext)
+      if (Test-Path $old) {
+        Write-Host "  removing retired voice $id$ext"
+        Remove-Item $old -Force
+      }
+    }
+  }
+  foreach ($v in $defaults) {
+    foreach ($file in @($v.files)) {
+      $o = Join-Path "$R\voices" $file.filename
       if (!(Test-Path $o) -or (Get-Item $o).Length -eq 0) {
-        Write-Host "  downloading $n.$e …"
-        curl.exe -fL --progress-bar -o $o "$B/$v.$e"
-        if ($LASTEXITCODE -ne 0) { throw "download failed: $n.$e" }
+        Write-Host "  downloading $($file.filename) …"
+        $tmp = "$o.partial"
+        curl.exe -fL --retry 3 --progress-bar -o $tmp $file.url
+        if ($LASTEXITCODE -ne 0) { throw "download failed: $($file.filename)" }
+        Move-Item -Force $tmp $o
       }
     }
   }
@@ -78,6 +94,9 @@ Remove-Item -Recurse -Force "$R\app\speakbar" -ErrorAction SilentlyContinue
 Copy-Item -Recurse "$Src\saytray" "$R\app\saytray"
 Copy-Item "$Src\run_saytray.pyw" "$R\app\"
 Copy-Item "$Src\VERSION" "$R\app\VERSION" -ErrorAction SilentlyContinue
+$notice = Join-Path $Src "THIRD_PARTY_NOTICES.md"
+if (!(Test-Path $notice)) { $notice = Join-Path $Src "..\THIRD_PARTY_NOTICES.md" }
+if (Test-Path $notice) { Copy-Item $notice "$R\app\THIRD_PARTY_NOTICES.md" -Force }
 @"
 """Auto-written by install.ps1 from the repo VERSION file. Do not edit by hand."""
 __version__ = "$Version"

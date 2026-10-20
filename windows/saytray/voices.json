@@ -1,0 +1,176 @@
+{
+  "defaultVoice": "en_US-norman-medium",
+  "removed": [
+    "en_US-ryan-high",
+    "en_US-lessac-high",
+    "en_US-amy-medium",
+    "en_US-libritts_r-medium"
+  ],
+  "voices": [
+    {
+      "id": "en_US-norman-medium",
+      "label": "Norman (medium)",
+      "blurb": "Male, US",
+      "installByDefault": true,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "en_US-norman-medium.onnx",
+          "sizeBytes": 63531379,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/norman/medium/en_US-norman-medium.onnx?download=true"
+        },
+        {
+          "filename": "en_US-norman-medium.onnx.json",
+          "sizeBytes": 4968,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/norman/medium/en_US-norman-medium.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "en_US-ljspeech-high",
+      "label": "LJSpeech (high)",
+      "blurb": "Female, US",
+      "installByDefault": true,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "en_US-ljspeech-high.onnx",
+          "sizeBytes": 114199011,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx?download=true"
+        },
+        {
+          "filename": "en_US-ljspeech-high.onnx.json",
+          "sizeBytes": 4970,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "en_US-kristin-medium",
+      "label": "Kristin (medium)",
+      "blurb": "Female, US",
+      "installByDefault": false,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "en_US-kristin-medium.onnx",
+          "sizeBytes": 63531379,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium/en_US-kristin-medium.onnx?download=true"
+        },
+        {
+          "filename": "en_US-kristin-medium.onnx.json",
+          "sizeBytes": 4968,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium/en_US-kristin-medium.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "en_US-john-medium",
+      "label": "John (medium)",
+      "blurb": "Male, US",
+      "installByDefault": false,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "en_US-john-medium.onnx",
+          "sizeBytes": 63531379,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/john/medium/en_US-john-medium.onnx?download=true"
+        },
+        {
+          "filename": "en_US-john-medium.onnx.json",
+          "sizeBytes": 4965,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/john/medium/en_US-john-medium.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "en_GB-cori-high",
+      "label": "Cori (high)",
+      "blurb": "Female, UK",
+      "installByDefault": false,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "en_GB-cori-high.onnx",
+          "sizeBytes": 114219352,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/high/en_GB-cori-high.onnx?download=true"
+        },
+        {
+          "filename": "en_GB-cori-high.onnx.json",
+          "sizeBytes": 4963,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/high/en_GB-cori-high.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "en_US-libritts-high",
+      "label": "LibriTTS (high)",
+      "blurb": "Multi-speaker, US",
+      "installByDefault": false,
+      "speakers": [
+        {
+          "id": 0,
+          "label": "0 - female"
+        },
+        {
+          "id": 2,
+          "label": "2 - male"
+        },
+        {
+          "id": 4,
+          "label": "4 - female"
+        }
+      ],
+      "files": [
+        {
+          "filename": "en_US-libritts-high.onnx",
+          "sizeBytes": 136673811,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx?download=true"
+        },
+        {
+          "filename": "en_US-libritts-high.onnx.json",
+          "sizeBytes": 20163,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "en_US-bryce-medium",
+      "label": "Bryce (medium)",
+      "blurb": "Male, US",
+      "installByDefault": false,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "en_US-bryce-medium.onnx",
+          "sizeBytes": 63531379,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx?download=true"
+        },
+        {
+          "filename": "en_US-bryce-medium.onnx.json",
+          "sizeBytes": 4966,
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json?download=true"
+        }
+      ]
+    },
+    {
+      "id": "jenny-dioco",
+      "label": "Jenny (Dioco)",
+      "blurb": "Female, Irish/UK",
+      "installByDefault": false,
+      "speakers": [],
+      "files": [
+        {
+          "filename": "jenny-dioco.onnx",
+          "sizeBytes": 63531379,
+          "url": "https://sfo3.digitaloceanspaces.com/bkmdls/jenny.onnx"
+        },
+        {
+          "filename": "jenny-dioco.onnx.json",
+          "sizeBytes": 7084,
+          "url": "https://sfo3.digitaloceanspaces.com/bkmdls/jenny.onnx.json"
+        }
+      ]
+    }
+  ]
+}

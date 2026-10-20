@@ -1,8 +1,10 @@
 """Settings window (tkinter, own thread)."""
 import threading
 import tkinter as tk
-from tkinter import ttk
-from .config import installed_voices, pretty_voice
+from tkinter import ttk, messagebox
+from .config import pretty_voice
+from .voices import (by_id, delete_voice, downloads, format_size, is_installed,
+                     normalize_speaker, voice_size, voices)
 from . import sapi, startup
 
 _open = [False]
@@ -19,7 +21,7 @@ def _run(settings, on_saved, test_speak):
     try:
         root = tk.Tk()
         root.title("SayTray Settings")
-        root.resizable(False, False)
+        root.resizable(False, True)
         f = ttk.Frame(root, padding=14)
         f.grid()
         r = 0
@@ -45,9 +47,103 @@ def _run(settings, on_saved, test_speak):
         row("Read selected text", recorder(read_v))
         row("Dictate (hold)", recorder(dict_v))
 
-        vmap = {pretty_voice(v): v for v in installed_voices()}
-        voice_v = tk.StringVar(value=pretty_voice(settings["voice"]))
-        row("Piper voice", ttk.Combobox(f, textvariable=voice_v, values=list(vmap), state="readonly", width=30))
+        voice_v = tk.StringVar(value=settings["voice"])
+        box = ttk.LabelFrame(f, text="Piper voices", padding=8)
+        box.grid(row=r, column=0, columnspan=2, sticky="we", pady=6)
+        r += 1
+        ttk.Label(box, text="Norman is the default. Other voices download when you ask (~size shown).",
+                  foreground="#666").grid(row=0, column=0, columnspan=3, sticky="w")
+        status_vars = {}
+        buttons = {}
+        for i, v in enumerate(voices()):
+            vid = v["id"]
+            ttk.Label(box, text=pretty_voice(vid), width=22).grid(row=i + 1, column=0, sticky="w", pady=2)
+            status_vars[vid] = tk.StringVar()
+            ttk.Label(box, textvariable=status_vars[vid], width=28).grid(row=i + 1, column=1, sticky="w")
+            bf = ttk.Frame(box)
+            bf.grid(row=i + 1, column=2, sticky="e")
+            buttons[vid] = bf
+
+        speaker_row = ttk.Frame(f)
+        speaker_row.grid(row=r, column=0, columnspan=2, sticky="we", pady=4)
+        r += 1
+        ttk.Label(speaker_row, text="LibriTTS speaker").pack(side="left")
+        speaker_v = tk.StringVar()
+        speaker_box = ttk.Combobox(speaker_row, textvariable=speaker_v, state="readonly", width=24)
+        speaker_box.pack(side="left", padx=8)
+
+        def sync_speaker(*_):
+            v = by_id(voice_v.get())
+            sps = (v or {}).get("speakers") or []
+            if not sps:
+                speaker_row.grid_remove()
+                return
+            speaker_row.grid()
+            speaker_box["values"] = [s["label"] for s in sps]
+            want = normalize_speaker(v["id"], settings.data.get("speaker"))
+            label = next((s["label"] for s in sps if s["id"] == want), sps[0]["label"])
+            if speaker_v.get() not in speaker_box["values"]:
+                speaker_v.set(label)
+
+        def choose(vid):
+            voice_v.set(vid)
+            sync_speaker()
+
+        def start_download(vid):
+            downloads.start(vid)
+            choose(vid)
+
+        def do_delete(vid):
+            if not messagebox.askyesno("Delete voice", f"Delete {pretty_voice(vid)}?\nYou can download it again."):
+                return
+            try:
+                delete_voice(vid)
+            except Exception as e:
+                messagebox.showerror("SayTray", str(e))
+                return
+            voice_v.set(settings["voice"])
+            sync_speaker()
+
+        button_mode = {}
+
+        def paint():
+            if not root.winfo_exists():
+                return
+            for v in voices():
+                vid = v["id"]
+                st = downloads.status(vid)
+                installed = is_installed(v)
+                if installed and voice_v.get() == vid:
+                    status_vars[vid].set("Selected")
+                    mode = "selected"
+                elif installed:
+                    status_vars[vid].set("Installed - " + v.get("blurb", ""))
+                    mode = "installed"
+                elif st.get("state") == "downloading":
+                    status_vars[vid].set(st.get("message") or "Downloading...")
+                    mode = "downloading"
+                elif st.get("state") == "error":
+                    status_vars[vid].set(st.get("message") or "Download failed")
+                    mode = "error"
+                else:
+                    status_vars[vid].set(f"{format_size(voice_size(v))} - {v.get('blurb', '')}")
+                    mode = "available"
+                if button_mode.get(vid) == mode:
+                    continue
+                button_mode[vid] = mode
+                bf = buttons[vid]
+                for child in bf.winfo_children():
+                    child.destroy()
+                if mode in ("selected", "installed"):
+                    if mode != "selected":
+                        ttk.Button(bf, text="Use", width=8, command=lambda vid=vid: choose(vid)).pack(side="left")
+                    ttk.Button(bf, text="Delete", width=8, command=lambda vid=vid: do_delete(vid)).pack(side="left", padx=2)
+                elif mode == "downloading":
+                    ttk.Button(bf, text="Downloading", width=14, state="disabled").pack(side="left")
+                else:
+                    ttk.Button(bf, text="Download", width=10, command=lambda vid=vid: start_download(vid)).pack(side="left")
+            root.after(400, paint)
+
         sv = sapi.voices()
         sapi_v = tk.StringVar(value=settings["sapi_voice"] or (sv[0] if sv else ""))
         row("Fallback Windows voice", ttk.Combobox(f, textvariable=sapi_v, values=sv, state="readonly", width=30))
@@ -67,9 +163,17 @@ def _run(settings, on_saved, test_speak):
         ttk.Label(f, text="Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor.",
                   foreground="#666").grid(row=r, column=0, columnspan=2, sticky="w"); r += 1
 
+        def speaker_id():
+            v = by_id(voice_v.get())
+            sps = (v or {}).get("speakers") or []
+            for s in sps:
+                if s["label"] == speaker_v.get():
+                    return int(s["id"])
+            return normalize_speaker(voice_v.get(), settings.data.get("speaker")) or 0
+
         def save(close=True):
             settings.set(read_hotkey=read_v.get().strip() or "alt+`", dictate_hotkey=dict_v.get().strip() or "ctrl+alt+space",
-                         voice=vmap.get(voice_v.get(), settings["voice"]), sapi_voice=sapi_v.get(),
+                         voice=voice_v.get() or settings["voice"], speaker=speaker_id(), sapi_voice=sapi_v.get(),
                          speed=round(float(speed_v.get()) * 10) / 10, start_with_windows=bool(start_v.get()), chime=bool(chime_v.get()))
             startup.set_enabled(bool(start_v.get()))
             on_saved()
@@ -79,6 +183,8 @@ def _run(settings, on_saved, test_speak):
         ttk.Button(bf, text="Test voice", command=lambda: (save(False), test_speak("Hello Jon. This is SayTray, reading at the current speed."))).pack(side="left", padx=4)
         ttk.Button(bf, text="Save", command=save).pack(side="left", padx=4)
         ttk.Button(bf, text="Cancel", command=root.destroy).pack(side="left")
+        sync_speaker()
+        paint()
         root.attributes("-topmost", True); root.after(300, lambda: root.attributes("-topmost", False))
         root.mainloop()
     finally:

@@ -6,7 +6,7 @@ enum PipelineTest {
   static func run(_ args: [String]) -> Int32 {
     guard args.count >= 2 else { print("usage: --pipeline-test out.json files..."); return 2 }
     let engine = PiperEngine()
-    let voice = ProcessInfo.processInfo.environment["SB_VOICE"] ?? "en_US-ryan-high"
+    let voice = ProcessInfo.processInfo.environment["SB_VOICE"] ?? "en_US-norman-medium"
     guard engine.ensure(voice: voice) else { print("piper unavailable"); return 3 }
     var report: [[String: Any]] = []
     let base = FileManager.default.temporaryDirectory.appendingPathComponent("saytray-pipeline-test")

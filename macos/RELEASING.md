@@ -63,6 +63,6 @@ gh release create v1.0.1 \
   dist/SayTray-1.0.1-Windows.zip
 ```
 
-Include in the notes: Mac Gatekeeper right-click → Open; Mac Accessibility / Microphone / Speech Recognition; Windows default-mic tip; first-run ~360 MB voice download.
+Include in the notes: Mac Gatekeeper right-click → Open; Mac Accessibility / Microphone / Speech Recognition; Windows default-mic tip; first-run ~170 MB voice download (Norman + LJSpeech).
 
 Tag format: `vMAJOR.MINOR.PATCH`.

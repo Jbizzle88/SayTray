@@ -3,11 +3,13 @@ push-to-talk dictation (hold Ctrl+Alt+Space)."""
 import os, sys, threading, time, ctypes
 from PIL import Image, ImageDraw
 import pystray
-from .config import Settings, installed_voices, pretty_voice
+from .config import Settings
 from .speaker import Speaker
 from .dictation import Dictation
 from .hotkeys import Hotkeys
 from .selection import read_selection
+from .voices import (default_voice, downloads, format_size, installed_ids, normalize_speaker,
+                     on_after_delete, on_before_delete, pretty_voice, remove_retired_voices, voice_size, voices)
 from . import logs, settings_ui, startup
 
 DEBUG_DIR = os.path.join(logs.ROOT, "debug")
@@ -66,11 +68,15 @@ def _icon(state):
 class App:
     def __init__(self):
         self.settings = Settings()
+        remove_retired_voices()
         self.speaker = Speaker(self.settings)
         self.dictation = Dictation(player=self.speaker.player, settings=self.settings)
         self.hotkeys = Hotkeys()
         self.speaker.on_state = self._update_icon
         self.dictation.on_state = self._update_icon
+        on_before_delete(self._before_delete_voice)
+        on_after_delete(self._after_delete_voice)
+        downloads.add_listener(self._download_update)
         self.icon = pystray.Icon("SayTray", _icon("idle"), "SayTray", menu=self._menu())
 
     # actions
@@ -102,12 +108,71 @@ class App:
         except Exception:
             pass
 
+    def _before_delete_voice(self, voice_id):
+        s = self.settings
+        if s["voice"] == voice_id:
+            nxt = next((i for i in installed_ids() if i != voice_id), default_voice())
+            s.set(voice=nxt, speaker=normalize_speaker(nxt, s.data.get("speaker")) or 0)
+        self.speaker.engine.release(voice_id)
+
+    def _after_delete_voice(self, voice_id):
+        self._saved()
+
+    def _download_update(self, voice_id, status):
+        try:
+            if status.get("state") == "done":
+                self.settings.set(voice=voice_id, speaker=normalize_speaker(voice_id, 0) or 0)
+                self.speaker.warm_up()
+                try:
+                    self.icon.notify(f"{pretty_voice(voice_id)} is ready.", "SayTray")
+                except Exception:
+                    pass
+            self.icon.menu = self._menu()
+            self.icon.update_menu()
+        except Exception:
+            pass
+
+    def _voice_menu(self):
+        s = self.settings
+        items = []
+        active = downloads.active()
+        if active:
+            vid, st = active[0]
+            items.append(pystray.MenuItem(f"{pretty_voice(vid)}: {st.get('message') or 'Downloading…'}", None, enabled=False))
+        for v in voices():
+            vid = v["id"]
+            label = pretty_voice(vid)
+            if vid in installed_ids():
+                speakers = v.get("speakers") or []
+                if speakers:
+                    def set_sp(sid, vid=vid):
+                        return lambda icon, item: (s.set(voice=vid, speaker=sid), self._saved())
+                    items.append(pystray.MenuItem(label, pystray.Menu(*[
+                        pystray.MenuItem(sp["label"], set_sp(sp["id"]), radio=True,
+                                         checked=lambda i, vid=vid, sid=sp["id"]: s["voice"] == vid and int(s.data.get("speaker") or 0) == sid)
+                        for sp in speakers
+                    ])))
+                else:
+                    def set_voice(vid=vid):
+                        return lambda icon, item: (s.set(voice=vid), self._saved())
+                    items.append(pystray.MenuItem(label, set_voice(), radio=True, checked=lambda i, vid=vid: s["voice"] == vid))
+            else:
+                st = downloads.status(vid)
+                if st.get("state") == "downloading":
+                    title = f"{label} — {st.get('message') or 'Downloading…'}"
+                elif st.get("state") == "error":
+                    title = f"{label} — {st.get('message')}"
+                else:
+                    title = f"{label} — {format_size(voice_size(v))}"
+                def start(vid=vid):
+                    return lambda icon, item: downloads.start(vid)
+                items.append(pystray.MenuItem(title, start()))
+        return pystray.Menu(*items)
+
     def _menu(self):
         s = self.settings
         def set_speed(v):
             return lambda icon, item: (s.set(speed=v), self._saved())
-        def set_voice(v):
-            return lambda icon, item: (s.set(voice=v), self._saved())
         speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
         return pystray.Menu(
             pystray.MenuItem(f"Read selected text ({s['read_hotkey']})", lambda: self.read(), default=True),
@@ -115,8 +180,8 @@ class App:
             pystray.MenuItem(f"Hold {s['dictate_hotkey']} to dictate", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Speed", pystray.Menu(*[pystray.MenuItem(f"{v:g}x", set_speed(v), checked=lambda i, v=v: abs(s["speed"] - v) < 0.01, radio=True) for v in speeds])),
-            pystray.MenuItem("Voice", pystray.Menu(*[pystray.MenuItem(pretty_voice(v), set_voice(v), checked=lambda i, v=v: s["voice"] == v, radio=True) for v in installed_voices()])),
-            pystray.MenuItem("Settingsâ€¦", lambda: settings_ui.show(s, self._saved, self.speaker.speak)),
+            pystray.MenuItem("Voice", self._voice_menu()),
+            pystray.MenuItem("Settings…", lambda: settings_ui.show(s, self._saved, self.speaker.speak)),
             pystray.MenuItem("Open logs folder", lambda: os.startfile(logs.LOGS)),
             pystray.MenuItem("About SayTray", self._about),
             pystray.Menu.SEPARATOR,
@@ -133,6 +198,9 @@ class App:
             f"Dictate (hold): {s['dictate_hotkey']}\n\n"
             "Tip: set your real microphone as the Windows default input "
             "(avoid Oculus/Steam virtual devices) before dictating.\n\n"
+            "Default voice: Norman. Optional voices include LibriTTS "
+            "(CC BY 4.0, Zen et al.) and Jenny (Dioco).\n"
+            "See THIRD_PARTY_NOTICES for Piper, espeak-ng, and voice licenses.\n\n"
             "© Jon Becherer"
         )
         def show():
