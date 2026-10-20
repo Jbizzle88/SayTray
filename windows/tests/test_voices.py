@@ -38,7 +38,7 @@ check(not any(b in ids for b in banned), "banned voices are not in the catalog")
 
 libri = voices.by_id("en_US-libritts-high")
 check([s["id"] for s in libri["speakers"]] == [0, 2, 4], "LibriTTS speakers 0, 2, 4")
-check([s["label"] for s in libri["speakers"]] == ["0 - female", "2 - male", "4 - female"], "speaker labels")
+check([s["label"] for s in libri["speakers"]] == ["Speaker 1 (Female)", "Speaker 2 (Male)", "Speaker 3 (Female)"], "speaker labels")
 check(voices.normalize_speaker("en_US-libritts-high", 2) == 2, "keep speaker 2")
 check(voices.normalize_speaker("en_US-libritts-high", 1) == 0, "unknown speaker falls back to 0")
 check(voices.normalize_speaker("en_US-libritts-high", None) == 0, "missing speaker falls back to 0")

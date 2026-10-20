@@ -128,7 +128,7 @@ struct SettingsView: View {
       Section("Shortcuts") {
         LabeledContent("Read selected text") { HotKeyRecorder(hotKey: $st.readKey) }
         LabeledContent("Dictate (hold)") { HotKeyRecorder(hotKey: $st.dictateKey) }
-        Text("Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor.").font(.caption).foregroundStyle(.secondary)
+        Text("Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor. You can keep holding the modifier and press the key again.").font(.caption).foregroundStyle(.secondary)
         Toggle("Play chime when dictation starts and stops", isOn: $st.chime)
       }
       Section("Voice") {
@@ -139,11 +139,6 @@ struct SettingsView: View {
         if st.engine == "piper" {
           if PiperEngine.runtimeReady || !VoiceCatalog.voices.isEmpty {
             ForEach(VoiceCatalog.voices) { v in voiceRow(v) }
-            if let speakers = VoiceCatalog.voice(st.piperVoice)?.speakers, !speakers.isEmpty {
-              Picker("Speaker", selection: $st.piperSpeaker) {
-                ForEach(speakers) { s in Text(s.label).tag(s.id) }
-              }
-            }
             Text("Norman is the default. LJSpeech is included with setup. Other voices download here; sizes are the model files.")
               .font(.caption).foregroundStyle(.secondary)
           }
@@ -193,6 +188,15 @@ struct SettingsView: View {
       Text("\(VoiceCatalog.voice(deleteID ?? "")?.label ?? "This voice") will be removed. You can download it again.")
     }
   }
+  private func speakerBinding(_ v: CatalogVoice) -> Binding<Int> {
+    Binding(
+      get: { VoiceCatalog.speakerID(voice: v.id, saved: st.piperSpeaker) ?? v.speakers.first?.id ?? 0 },
+      set: { id in
+        if st.piperVoice != v.id { st.piperVoice = v.id }
+        st.piperSpeaker = id
+      }
+    )
+  }
   @ViewBuilder
   private func voiceRow(_ v: CatalogVoice) -> some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -203,6 +207,15 @@ struct SettingsView: View {
         }
         Spacer()
         if library.installed.contains(v.id) {
+          if !v.speakers.isEmpty {
+            Picker("Speaker", selection: speakerBinding(v)) {
+              ForEach(v.speakers) { s in Text(s.label).tag(s.id) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 190)
+            .accessibilityLabel("Speaker for \(v.label)")
+          }
           if st.piperVoice == v.id {
             Text("Selected").foregroundStyle(.secondary)
           } else {
