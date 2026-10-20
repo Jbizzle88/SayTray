@@ -14,22 +14,20 @@ final class PiperEngine {
   static let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/SayTray/piper")
   static var python: URL { dir.appendingPathComponent("venv/bin/python") }
   static var script: URL { dir.appendingPathComponent("saytray_piper.py") }
-  static var available: Bool {
-    FileManager.default.isExecutableFile(atPath: python.path) && FileManager.default.fileExists(atPath: script.path) && !installedVoices().isEmpty
+  static var runtimeReady: Bool {
+    FileManager.default.isExecutableFile(atPath: python.path) && FileManager.default.fileExists(atPath: script.path)
   }
+  static var available: Bool { runtimeReady && !installedVoices().isEmpty }
   static func installedVoices() -> [String] {
-    let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("voices").path)) ?? []
-    return files.filter { $0.hasSuffix(".onnx") }.map { String($0.dropLast(5)) }.sorted()
+    VoiceCatalog.voices.filter { VoiceCatalog.isInstalled($0) }.map(\.id)
   }
-  static func pretty(_ v: String) -> String {
-    let p = v.split(separator: "-")
-    return p.count >= 3 ? "\(p[1].replacingOccurrences(of: "_", with: " ").capitalized) (\(p[2]))" : v
-  }
+  static func pretty(_ v: String) -> String { VoiceCatalog.voice(v)?.label ?? v }
 
   private struct Pending { let read: Int; let json: [String: Any]; let done: Done; var sentAt: Date; let timeout: TimeInterval }
   private var proc: Process?
   private var input: FileHandle?
   private(set) var voice = ""
+  var speakerID: Int?
   private var pending: [String: Pending] = [:]
   private var quitting = false
   private var watchdog: Timer?
@@ -38,10 +36,16 @@ final class PiperEngine {
   /// Start (or keep) the helper for `voice`. Returns false if Piper isn't usable.
   @discardableResult
   func ensure(voice v: String) -> Bool {
-    guard PiperEngine.available else { return false }
-    if proc?.isRunning == true && voice == v { return true }
+    guard PiperEngine.available else {
+      if proc?.isRunning == true { shutdownProcess() }
+      return false
+    }
     let model = PiperEngine.dir.appendingPathComponent("voices/\(v).onnx")
-    guard FileManager.default.fileExists(atPath: model.path) else { return false }
+    if proc?.isRunning == true && voice == v && FileManager.default.fileExists(atPath: model.path) { return true }
+    guard FileManager.default.fileExists(atPath: model.path) else {
+      if voice == v { shutdownProcess() }
+      return false
+    }
     shutdownProcess()
     let p = Process()
     p.executableURL = PiperEngine.python
@@ -88,8 +92,9 @@ final class PiperEngine {
   }
 
   func synthesize(read: Int, name: String, text: String, dir: URL, noise: Noise, priority: Bool, done: @escaping Done) {
-    let json: [String: Any] = ["name": name, "read": read, "text": text, "dir": dir.path,
+    var json: [String: Any] = ["name": name, "read": read, "text": text, "dir": dir.path,
                                "noise_scale": noise.scale, "noise_w": noise.w, "priority": priority]
+    if let speakerID { json["speaker_id"] = speakerID }
     // generous: helper may be busy with earlier chunks of this read
     let timeout = 6.0 + Double(text.count) * 0.03 + Double(pending.count) * 2.0
     pending[name] = Pending(read: read, json: json, done: done, sentAt: Date(), timeout: timeout)

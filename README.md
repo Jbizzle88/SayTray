@@ -20,7 +20,7 @@ All releases: https://github.com/Jbizzle88/SayTray/releases
 
 ### First run (both platforms)
 
-Piper voices are **not** inside the zip (~360 MB). Run the included setup/installer once so voices download into your user Application Support / LocalAppData folder.
+Piper voices are **not** inside the zip. Setup downloads two voices the first time (**about 170 MB**): **Norman (medium)**, the default, and **LJSpeech (high)**. More commercially licensed voices (Kristin, John, Cori, LibriTTS, Bryce, and Jenny (Dioco)) download later from the voice list inside the app. They are stored in your user Application Support / LocalAppData folder.
 
 ### macOS notes
 
@@ -51,4 +51,4 @@ How to cut a new release: [`macos/RELEASING.md`](macos/RELEASING.md) / [`windows
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Piper and voice models have their own licenses (piper-tts / rhasspy piper-voices).
+MIT — see [LICENSE](LICENSE). Piper (GPL-3.0-or-later), espeak-ng (GPL-3.0-or-later), and the voice models have their own licenses — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). LibriTTS is CC BY 4.0. The optional Irish/UK voice is labeled Jenny (Dioco).

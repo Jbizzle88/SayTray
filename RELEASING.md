@@ -22,6 +22,6 @@ gh release create vX.Y.Z \
 - Set your real microphone as the Windows default input (avoid Oculus/Steam virtual devices).
 
 ### First run (both)
-- Piper voices download once (~360 MB) via Setup Piper Voices (Mac) or Install.cmd (Windows).
+- Piper voices download once (~170 MB: Norman + LJSpeech) via Setup Piper Voices (Mac) or Install.cmd (Windows). More voices download inside the app.
 NOTES
 ```

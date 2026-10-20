@@ -13,6 +13,8 @@ APP="build/SayTray.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/SayTray"
 cp support/saytray_piper.py "$APP/Contents/Resources/"
+cp Sources/SayTray/voices.json "$APP/Contents/Resources/voices.json"
+if [ -f ../THIRD_PARTY_NOTICES.md ]; then cp ../THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"; fi
 if [ -f assets/SayTray.icns ]; then
   cp assets/SayTray.icns "$APP/Contents/Resources/SayTray.icns"
 fi

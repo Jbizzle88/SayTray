@@ -2,7 +2,7 @@
 
 Free, offline system-tray text-to-speech and push-to-talk dictation.
 
-- **Read selected text aloud** with local Piper neural voices (Ryan high default)
+- **Read selected text aloud** with local Piper neural voices (Norman medium default, LJSpeech high included)
 - **Hold a hotkey to dictate** — text is typed at the cursor (faster-whisper, local)
 - Speed control, voice picker, hotkey rebinding, start with Windows, dictation chimes
 
@@ -16,7 +16,7 @@ Works fully offline after install downloads voices and Python packages. No accou
 
 1. Unzip `SayTray-*-Windows.zip`.
 2. Double-click **Install.cmd** (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
-3. First install downloads Python packages + ~360 MB of Piper voices into `%LOCALAPPDATA%\SayTray`.
+3. First install downloads Python packages + about **170 MB** of Piper voices (Norman and LJSpeech) into `%LOCALAPPDATA%\SayTray`.
 4. SayTray appears in the tray and Start Menu; it also registers under **Settings → Apps** (per-user).
 
 ### Mic tip (important for dictation)
@@ -51,7 +51,7 @@ Some apps running as Administrator can block global hotkeys unless SayTray is al
 
 ## Update
 
-Download a newer zip and run **Install.cmd** again (or `install.ps1`). Settings and voices are kept. See `RELEASING.md` for cutting a new build.
+Download a newer zip and run **Install.cmd** again (or `install.ps1`). Settings are kept. Re-running install downloads Norman and LJSpeech if they are missing (~170 MB) and deletes the old Ryan, Lessac, Amy, and LibriTTS-R files if they are still in the voices folder. A saved voice that SayTray no longer ships falls back to Norman. Optional voices (Kristin, John, Cori, LibriTTS, Bryce, Jenny (Dioco)) download from the Voice menu or Settings. See `RELEASING.md` for cutting a new build.
 
 ---
 
@@ -75,8 +75,9 @@ Debug drop files: `%LOCALAPPDATA%\SayTray\debug` (`speak.txt`, `dictate_start`, 
 ## Notes
 
 - Clipboard restore after “read selection” is plain text only (images/rich content may be lost).
-- If Piper fails, SayTray falls back to a Windows SAPI voice.
+- If Piper fails, or the selected voice is not downloaded, SayTray uses Norman when that file is installed, then a Windows SAPI voice.
+- **Voices:** Norman (medium, default, male US), LJSpeech (high, female US). Optional: Kristin (medium), John (medium), Cori (high, UK), LibriTTS (high, speakers 0 female / 2 male / 4 female), Bryce (medium), and Jenny (Dioco). Sizes are shown next to voices that are not downloaded yet.
 
 ## License / credits
 
-SayTray by Jon Becherer. TTS via [Piper](https://github.com/OHF-voice/piper1-gpl). Dictation via faster-whisper. Voices from rhasspy/piper-voices on Hugging Face.
+SayTray by Jon Becherer. TTS via [Piper](https://github.com/OHF-voice/piper1-gpl) (piper-tts 1.8.0, GPL-3.0-or-later) and espeak-ng (GPL-3.0-or-later). Dictation via faster-whisper. Voice licenses, the LibriTTS CC BY 4.0 credit, and the Jenny (Dioco) credit are in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

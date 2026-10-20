@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     st.onVoiceChanged = { [weak self] in self?.speaker.warmUp() }
     dictation.onText = { SelectionReader.type($0) }
     registerHotKeys()
+    VoiceCatalog.removeRetired()
     speaker.warmUp()
     // Debug/test trigger: post distributed notification "com.jonbecherer.saytray.debugSpeak" with the text as object.
     DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.jonbecherer.saytray.debugSpeak"), object: nil, queue: .main) { [weak self] n in
@@ -95,6 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     Read: \(st.readKey.label)
     Dictate (hold): \(st.dictateKey.label)
+
+    Default voice: Norman. Optional voices include LibriTTS (CC BY 4.0, Zen et al.) and Jenny (Dioco).
+    See THIRD_PARTY_NOTICES for Piper, espeak-ng, and voice licenses.
 
     © Jon Becherer
     """

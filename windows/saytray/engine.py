@@ -15,6 +15,7 @@ class Noise:
 class PiperEngine:
     def __init__(self):
         self.voice_name = None
+        self.speaker_id = None
         self._voice = None
         self._want_voice = None
         self._queue = []
@@ -34,6 +35,17 @@ class PiperEngine:
                 self._cv.notify()
         return True
 
+    def release(self, voice_name=None):
+        """Drop a loaded voice so its files can be deleted. In-flight synth may still fail."""
+        import gc
+        with self._cv:
+            if voice_name is None or self.voice_name == voice_name or self._want_voice == voice_name:
+                self._want_voice = None
+                self._voice = None
+                self.voice_name = None
+                self._cv.notify()
+        gc.collect()
+
     def wait_ready(self, timeout=60):
         t0 = time.time()
         while time.time() - t0 < timeout:
@@ -43,7 +55,8 @@ class PiperEngine:
         return False
 
     def synthesize(self, read, name, text, out_dir, noise, priority, done):
-        req = {"read": read, "name": name, "text": text, "dir": out_dir, "noise": noise, "done": done}
+        req = {"read": read, "name": name, "text": text, "dir": out_dir, "noise": noise,
+               "speaker_id": self.speaker_id, "done": done}
         with self._cv:
             if priority:
                 self._queue.insert(0, req)
@@ -56,11 +69,13 @@ class PiperEngine:
             self._queue = [q for q in self._queue if q["read"] != read]
 
     # internals
-    def _config(self, ns, nw):
+    def _config(self, ns, nw, speaker_id=None):
         from piper import SynthesisConfig
         if self._fields is None:
             self._fields = {f.name for f in dataclasses.fields(SynthesisConfig)}
         want = {"length_scale": 1.0, "noise_scale": ns, "noise_w_scale": nw, "noise_w": nw}
+        if speaker_id is not None:
+            want["speaker_id"] = int(speaker_id)
         return SynthesisConfig(**{k: v for k, v in want.items() if k in self._fields})
 
     def _load(self, name):
@@ -101,7 +116,7 @@ class PiperEngine:
             tmp = path + ".part"
             try:
                 with wave.open(tmp, "wb") as wf:
-                    self._voice.synthesize_wav(req["text"], wf, syn_config=self._config(*req["noise"]))
+                    self._voice.synthesize_wav(req["text"], wf, syn_config=self._config(*req["noise"], speaker_id=req.get("speaker_id")))
                 with wave.open(tmp, "rb") as r:
                     secs = r.getnframes() / float(r.getframerate())
                 os.replace(tmp, path)
