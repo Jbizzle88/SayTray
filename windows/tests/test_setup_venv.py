@@ -37,6 +37,8 @@ check("sha256" in setup and "checksum mismatch" in setup, "setup_piper.sh checks
 check("import piper, onnxruntime" in setup, "setup_piper.sh recreates a venv that cannot import Piper")
 check("import piper, onnxruntime" in install, "install.ps1 recreates a venv that cannot import Piper")
 check("Get-FileHash" in install and "checksum mismatch" in install, "install.ps1 checks sha256")
+check('"$out.sha256"' in setup, "setup_piper.sh writes the hash marker")
+check("Write-VoiceMarker" in install and ".sha256" in install, "install.ps1 writes the hash marker")
 check("WhisperModel" in install, "install.ps1 prefetches the dictation model")
 check("3.10" in setup and "3.10" in install, "installers require Python 3.10+")
 

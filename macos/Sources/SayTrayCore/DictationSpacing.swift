@@ -12,7 +12,7 @@ public enum DictationSpacing {
   }
 
   /// Brackets and $ at the start of a phrase get a space. Commas, periods, and these symbols do not.
-  private static let opening: Set<Character> = ["“", "‘", "«", "(", "[", "{", "$", "¿", "¡"]
+  private static let opening: Set<Character> = ["“", "‘", "«", "(", "[", "{", "$", "¿", "¡", "§"]
   private static let attachedSymbols: Set<Character> = ["+", "<", "=", ">", "^", "|", "~", "`"]
 
   public static func apply(_ text: String, previous: Character?) -> String {
@@ -42,52 +42,14 @@ public enum DictationSpacing {
     parts.reduce("") { merge($0, $1) }
   }
 
-  /// Join slices that shared about a second of audio. Only a short repeated word run is dropped.
+  /// Kept so callers compile. It does not remove words: text matching across a
+  /// slice boundary deleted real speech.
   public static func dedupeBoundary(_ left: String, _ right: String, maxWords: Int = 8) -> String {
-    let lw = left.split { $0.isWhitespace }.map(String.init)
-    let rw = right.split { $0.isWhitespace }.map(String.init)
-    if lw.isEmpty || rw.isEmpty { return right }
-    let cap = max(1, maxWords)
-    var best = 0
-    let limit = min(cap, lw.count, rw.count)
-    if limit >= 1 {
-      for n in 1...limit {
-        var same = true
-        for i in 0..<n {
-          if !sameWord(lw[lw.count - n + i], rw[i]) { same = false; break }
-        }
-        if same { best = n }
-      }
-    }
-    if best == 0 { return right }
-    let kept = Array(rw.dropFirst(best))
-    if kept.isEmpty { return "" }
-    var tail = right[...]
-    for word in rw.prefix(best) {
-      if let range = tail.range(of: word) {
-        tail = tail[range.upperBound...]
-      } else {
-        break
-      }
-    }
-    return String(tail).trimmingCharacters(in: .whitespaces)
+    return right
   }
 
   public static func joinOverlapped(_ parts: [String]) -> String {
-    var out = ""
-    for part in parts {
-      let piece = out.isEmpty ? part : dedupeBoundary(out, part)
-      out = merge(out, piece)
-    }
-    return out
-  }
-
-  private static func sameWord(_ a: String, _ b: String) -> Bool {
-    func norm(_ w: String) -> String {
-      String(w.lowercased().filter { $0.isLetter || $0.isNumber })
-    }
-    let na = norm(a), nb = norm(b)
-    return !na.isEmpty && na == nb
+    join(parts)
   }
 
   private static func isPunctuation(_ c: Character) -> Bool {

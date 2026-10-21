@@ -101,6 +101,41 @@ def _windows_capture_ids():
         return "", ""
 
 
+# x64 PROPVARIANT is 24 bytes: an 8-byte header plus a 16-byte union.
+# A 16-byte buffer lets IPropertyStore::GetValue write past the object.
+# The bus path looks like "{1}.BTHENUM\...". The enumerator name is "BTHENUM" or "USB".
+_PKEY_DEVICE_BUS = ("b3f8fa53-0004-438e-9003-51a46e139bfc", 2)
+_PKEY_DEVICE_ENUMERATOR = ("a45c254e-df1c-4efd-8020-67d146a850e0", 24)
+_VT_LPWSTR = 31
+
+
+def _propvariant_type():
+    import ctypes
+    from ctypes import wintypes
+
+    class PROPVARIANT(ctypes.Structure):
+        class _U(ctypes.Union):
+            _fields_ = [
+                ("pwszVal", ctypes.c_wchar_p),
+                ("_pad", ctypes.c_byte * 16),
+            ]
+
+        _fields_ = [
+            ("vt", wintypes.USHORT),
+            ("wReserved1", wintypes.USHORT),
+            ("wReserved2", wintypes.USHORT),
+            ("wReserved3", wintypes.USHORT),
+            ("u", _U),
+        ]
+
+    return PROPVARIANT
+
+
+def propvariant_size():
+    import ctypes
+    return ctypes.sizeof(_propvariant_type())
+
+
 def _mmdevice_capture_ids():
     import ctypes
     from ctypes import wintypes
@@ -122,17 +157,9 @@ def _mmdevice_capture_ids():
     class PROPERTYKEY(ctypes.Structure):
         _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
 
-    class PROPVARIANT(ctypes.Structure):
-        class _U(ctypes.Union):
-            _fields_ = [("pwszVal", ctypes.c_wchar_p)]
-        _fields_ = [
-            ("vt", wintypes.USHORT),
-            ("r1", wintypes.USHORT),
-            ("r2", wintypes.USHORT),
-            ("r3", wintypes.USHORT),
-            ("u", _U),
-        ]
-
+    PROPVARIANT = _propvariant_type()
+    ole32.PropVariantClear.argtypes = [ctypes.POINTER(PROPVARIANT)]
+    ole32.PropVariantClear.restype = ctypes.HRESULT
     ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
     ole32.CoCreateInstance.argtypes = [
         ctypes.POINTER(GUID), ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)
@@ -162,24 +189,36 @@ def _mmdevice_capture_ids():
     if get_id(endpoint, ctypes.byref(id_ptr)) >= 0 and id_ptr.value:
         endpoint_id = id_ptr.value
         ole32.CoTaskMemFree(id_ptr)
-    instance_id = ""
+    instance_parts = []
     store = ctypes.c_void_p()
     open_store = vtbl(endpoint, 4, ctypes.HRESULT, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))
     if open_store(endpoint, 0, ctypes.byref(store)) >= 0 and store:
-        key = PROPERTYKEY()
-        key.fmtid = GUID(guid("78C34FC8-104A-4ACA-9EA4-524D52996E57"))
-        key.pid = 256
-        var = PROPVARIANT()
         get_value = vtbl(store, 5, ctypes.HRESULT, ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT))
-        if get_value(store, ctypes.byref(key), ctypes.byref(var)) >= 0 and var.vt == 31 and var.u.pwszVal:
-            instance_id = var.u.pwszVal
+
+        def read_prop(fmtid, pid):
+            key = PROPERTYKEY()
+            key.fmtid = GUID(guid(fmtid))
+            key.pid = pid
+            var = PROPVARIANT()
+            text = ""
+            try:
+                if get_value(store, ctypes.byref(key), ctypes.byref(var)) >= 0 and var.vt == _VT_LPWSTR and var.u.pwszVal:
+                    text = var.u.pwszVal
+            finally:
+                ole32.PropVariantClear(ctypes.byref(var))
+            return text or ""
+
+        for fmtid, pid in (_PKEY_DEVICE_BUS, _PKEY_DEVICE_ENUMERATOR):
+            got = read_prop(fmtid, pid)
+            if got:
+                instance_parts.append(got)
         release = vtbl(store, 2, ctypes.c_ulong)
         release(store)
     release_dev = vtbl(endpoint, 2, ctypes.c_ulong)
     release_dev(endpoint)
     release_enum = vtbl(enumerator, 2, ctypes.c_ulong)
     release_enum(enumerator)
-    return endpoint_id or "", instance_id or ""
+    return endpoint_id or "", "\n".join(instance_parts)
 
 
 def _host_input_names():

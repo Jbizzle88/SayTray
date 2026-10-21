@@ -5,15 +5,14 @@ reliably return the beginning of a multi-minute clip. The full audio is kept.
 It is recognized in pieces of at most SEGMENT_S seconds. If a piece's transcript
 does not cover that piece, it is halved and recognized again, then joined in order.
 """
-from .preroll import overlapped_pieces
-from .spacing import join_overlapped, join_segments
-from . import logs
+from .preroll import split_pcm
+from .spacing import join_segments
 
 SEGMENT_S = 30.0
 MIN_SLICE_S = 8.0
-# A second on each side of a 30 s cut. The slice stays near 32 s, under the
-# one-minute recognizer window, and a word on the cut is in both transcripts.
-OVERLAP_S = 1.0
+# No shared audio between slices. A one-second overlap made real faster-whisper
+# transcripts repeat phrases and lose more words than a plain cut.
+OVERLAP_S = 0.0
 
 
 def needs_resplit(audio_s, first_word_at, last_word_end, failed, characters):
@@ -37,14 +36,10 @@ def stitch_audio(audio, sample_rate, limit_s, transcribe, depth_limit=4, on_resp
     Offsets are seconds from the start of `samples`. Returns the joined transcript.
     Every sample is sent to some leaf transcription; none are dropped.
     """
-    pieces = overlapped_pieces(audio, sample_rate, limit_s, OVERLAP_S)
+    pieces = split_pcm(audio, sample_rate, limit_s)
     parts = [_piece(piece, sample_rate, transcribe, 0, depth_limit, on_resplit) for piece in pieces]
     if len(parts) > 1:
-        joined = join_overlapped(parts)
-        plain = join_segments(parts)
-        if joined != plain:
-            logs.event("dictation: slice overlap dropped repeated boundary words")
-        return joined
+        return join_segments(parts)
     return parts[0] if parts else ""
 
 

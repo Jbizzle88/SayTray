@@ -48,7 +48,10 @@ class Hotkeys:
         self._on_arm = None
         self._on_unusable = None
         self._arm_timer = None
+        self._arm_pending = False
+        self._arm_lock = threading.Lock()
         self._dictate_main = ""
+        self._read_mods = set()
 
     def register(self, read_combo, on_read, dictate_combo, on_down, on_up, on_arm=None, on_unusable=None):
         import keyboard
@@ -62,6 +65,8 @@ class Hotkeys:
         self._arm = ModifierArm(dictate_combo)
         parts = chord_parts(dictate_combo)
         self._dictate_main = parts[-1] if len(parts) > 1 else ""
+        read_parts = chord_parts(read_combo)
+        self._read_mods = set(read_parts[:-1]) if len(read_parts) > 1 else set()
         self._on_down, self._on_up, self._on_arm = on_down, on_up, on_arm
         self._hook = keyboard.hook(self._event)
         logs.event(f"hotkeys registered: read={read_combo} dictate(hold)={dictate_combo}")
@@ -92,8 +97,11 @@ class Hotkeys:
         import keyboard
         is_down = e.event_type == keyboard.KEY_DOWN
         key = canonical(e.name)
-        if self._arm is not None and self._arm.mods and self._arm.event(e.name, is_down):
-            self._schedule_arm()
+        if self._arm is not None and self._arm.mods:
+            if self._arm.event(e.name, is_down):
+                self._schedule_arm()
+            elif not self._arm.ready:
+                self._cancel_arm()
         if is_down and self._dictate_main:
             if key == self._dictate_main:
                 self._flush_arm()
@@ -127,22 +135,48 @@ class Hotkeys:
         self._arm = None
         self._cancel_arm()
         self._dictate_main = ""
+        self._read_mods = set()
+
+    def _read_modifiers_held(self):
+        arm = self._arm
+        if arm is None or not self._read_mods:
+            return False
+        return self._read_mods <= arm.down
 
     def _schedule_arm(self):
         """Wait briefly so a read-hotkey or other key can cancel the pre-warm."""
         self._cancel_arm()
-        timer = threading.Timer(_ARM_DELAY_S, self._flush_arm)
+        timer = threading.Timer(_ARM_DELAY_S, lambda: self._flush_arm(True))
         timer.daemon = True
-        self._arm_timer = timer
+        with self._arm_lock:
+            self._arm_pending = True
+            self._arm_timer = timer
         timer.start()
 
     def _cancel_arm(self):
-        timer = self._arm_timer
-        self._arm_timer = None
+        with self._arm_lock:
+            self._arm_pending = False
+            timer = self._arm_timer
+            self._arm_timer = None
         if timer is not None:
             timer.cancel()
 
-    def _flush_arm(self):
-        self._cancel_arm()
-        if self._on_arm:
+    def _flush_arm(self, from_timer=False):
+        with self._arm_lock:
+            if not self._arm_pending:
+                return
+            # The read shortcut uses these modifiers. Opening now would turn the
+            # mic on for a read. The dictate key still flushes this once.
+            if from_timer and self._read_modifiers_held():
+                timer = self._arm_timer
+                self._arm_timer = None
+                fire = False
+            else:
+                self._arm_pending = False
+                timer = self._arm_timer
+                self._arm_timer = None
+                fire = True
+        if timer is not None:
+            timer.cancel()
+        if fire and self._on_arm:
             self._on_arm()

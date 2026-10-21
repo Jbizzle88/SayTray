@@ -294,5 +294,25 @@ def _check_trust_quick():
 
 _check_trust_quick()
 
+def _check_startup_does_not_hash():
+    norman = voices.by_id("en_US-norman-medium")
+    with tempfile.TemporaryDirectory() as d:
+        for f in norman["files"]:
+            with open(os.path.join(d, f["filename"]), "wb") as fh:
+                fh.truncate(int(f["sizeBytes"]))
+        def boom(_path):
+            raise AssertionError("startup hashed a voice")
+        old = voices.sha256_file
+        voices.sha256_file = boom
+        try:
+            check(voices.installed_ids(d) == [], "startup does not hash unmarked voices")
+            for f in norman["files"]:
+                voices.write_hash_marker(os.path.join(d, f["filename"]), f.get("sha256") or "")
+            check(voices.installed_ids(d) == ["en_US-norman-medium"], "markers make the voice installed without hashing")
+        finally:
+            voices.sha256_file = old
+
+_check_startup_does_not_hash()
+
 print(f"Voice catalog tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)
