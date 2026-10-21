@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     registerHotKeys()
     VoiceCatalog.removeRetired()
     speaker.warmUp()
+    Chime.preload()
     // Debug/test trigger: post distributed notification "com.jonbecherer.saytray.debugSpeak" with the text as object.
     DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.jonbecherer.saytray.debugSpeak"), object: nil, queue: .main) { [weak self] n in
       if let t = n.object as? String, !t.isEmpty { self?.speaker.speak(t) }
@@ -27,7 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if (n.object as? String) == "start" { self?.dictation.start() } else { self?.dictation.stop() }
     }
     if !Permissions.accessibility { Permissions.promptAccessibility() }
-    if Permissions.mic == .notDetermined || Permissions.speech == .notDetermined { Permissions.requestMicAndSpeech() }
+    if Permissions.mic == .notDetermined || Permissions.speech == .notDetermined {
+      Permissions.requestMicAndSpeech { [weak self] in self?.dictation.warmMicrophone() }
+    } else {
+      dictation.warmMicrophone()
+    }
     Log.event("launched; accessibility=\(Permissions.accessibility) mic=\(Permissions.mic.rawValue) speech=\(Permissions.speech.rawValue)")
   }
 

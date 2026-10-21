@@ -9,6 +9,8 @@ $u = $u -bor $LASTEXITCODE
 $u = $u -bor $LASTEXITCODE
 & $py "$PSScriptRoot\tests\test_setup_venv.py"
 $u = $u -bor $LASTEXITCODE
+& $py "$PSScriptRoot\tests\test_dictation_flow.py"
+$u = $u -bor $LASTEXITCODE
 $files = @(Get-ChildItem "$PSScriptRoot\tests\corpus\*.txt") + @(Get-ChildItem "$PSScriptRoot\tests\past\*.txt" -ErrorAction SilentlyContinue) | ForEach-Object { $_.FullName }
 & $py "$PSScriptRoot\tests\pipeline_test.py" "$PSScriptRoot\tests\pipeline.json" @files
 exit ($u -bor $LASTEXITCODE)
