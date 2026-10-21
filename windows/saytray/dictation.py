@@ -1,17 +1,21 @@
 """Push-to-talk dictation: record while the hotkey is held, transcribe locally with faster-whisper
 (base.en, CPU int8), type the result at the cursor.
 
-start() and stop() return immediately. The microphone opens on a worker after the start chime,
-and a generation counter drops that open if the key is released during the chime or if a new
-hold begins while the previous transcript is still running.
+The input stream stays open and keeps ~450 ms of audio, so the start of a phrase is not lost
+to device startup or the chime. The chime is replayed from a preloaded buffer and does not
+delay capture. Long clips are transcribed in 50 s pieces and concatenated, in press order.
 """
 import threading, time
 import numpy as np
 from . import logs
-from .selection import type_text
+from .preroll import Ring, split_pcm
+from .selection import insert_dictation
+from .spacing import join_segments
 
 SR = 16000
-_CHIME_LEAD = 0.16  # start tone is ~120 ms; wait so the mic does not cut it off or transcribe it
+_PRE_ROLL_S = 0.45
+_SEGMENT_S = 50.0
+_MIN_LIVE_S = 0.15
 
 
 class Dictation:
@@ -25,12 +29,16 @@ class Dictation:
         self.player = player
         self.settings = settings
         self._lock = threading.Lock()
+        self._open_lock = threading.Lock()
         self._transcribe_lock = threading.Lock()
         self._gen = 0
-        self._phase = "idle"  # idle, arming, recording, finalizing
-        self._mic_closed = threading.Event()
-        self._mic_closed.set()
+        self._phase = "idle"  # idle, recording, finalizing
+        self._ring = Ring(int(SR * _PRE_ROLL_S))
+        self._pre_samples = 0
+        self._pressed_at = None
+        self._first_live_at = None
         threading.Thread(target=self._load_model, daemon=True, name="whisper-load").start()
+        threading.Thread(target=self._open_warm, daemon=True, name="dictation-warm").start()
 
     def _load_model(self):
         try:
@@ -42,147 +50,148 @@ class Dictation:
             logs.event(f"dictation: model load failed: {e!r}")
 
     def _cb(self, indata, frames, t, status):
-        if not self._capturing:
-            return
-        chunk = indata[:, 0].copy()
+        samples = indata[:, 0].copy()
         with self._lock:
+            self._ring.push(samples)
             if self._capturing:
-                self._frames.append(chunk)
+                if self._first_live_at is None:
+                    self._first_live_at = time.monotonic()
+                self._frames.append(samples)
+
+    def _stream_ok(self):
+        try:
+            return self._stream is not None and bool(self._stream.active)
+        except Exception:
+            return False
+
+    def _open_warm(self):
+        with self._open_lock:
+            if self._stream_ok():
+                return False
+            import sounddevice as sd
+            try:
+                stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", callback=self._cb)
+                stream.start()
+            except Exception as e:
+                logs.event(f"dictation: microphone open failed: {e!r}")
+                return False
+            with self._lock:
+                old, self._stream = self._stream, stream
+            if old is not None:
+                try:
+                    old.stop(); old.close()
+                except Exception:
+                    pass
+            logs.event("dictation: pre-roll microphone running")
+            return True
 
     def start(self):
+        pressed = time.monotonic()
         with self._lock:
-            if self._phase in ("arming", "recording"):
-                logs.event(f"dictation: start ignored, already {self._phase}")
+            if self._phase == "recording":
+                logs.event("dictation: start ignored, already recording")
                 return
             if self._phase == "finalizing":
                 logs.event("dictation: previous session still finalizing; starting a new one")
             self._gen += 1
             gen = self._gen
-            self._phase = "arming"
+            self._phase = "recording"
             self.recording = True
-            self._capturing = False
-            self._frames = []
+            need_open = not self._stream_ok()
         self._state()
-        logs.event(f"dictation: arming gen {gen}")
-        threading.Thread(target=self._arm, args=(gen,), daemon=True, name="dictation-arm").start()
-
-    def _arm(self, gen):
-        played = self._chime("start")
-        if played:
-            time.sleep(_CHIME_LEAD)
+        just_opened = False
+        if need_open:
+            just_opened = self._open_warm()
         with self._lock:
-            if gen != self._gen or self._phase != "arming":
-                logs.event(f"dictation: arm cancelled gen {gen}")
+            if gen != self._gen or self._phase != "recording":
+                logs.event(f"dictation: start cancelled gen {gen}")
                 return
-        self._open_mic(gen)
-
-    def _open_mic(self, gen):
-        import sounddevice as sd
-        if not self._wait_mic(gen):
-            return
-        try:
-            stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", callback=self._cb)
-            stream.start()
-        except Exception as e:
-            logs.event(f"dictation: microphone open failed: {e!r}")
-            with self._lock:
-                if gen == self._gen and self._phase == "arming":
-                    self._phase = "idle"
-                    self.recording = False
-                    self._capturing = False
-            self._state()
-            return
-        with self._lock:
-            if gen != self._gen or self._phase != "arming":
-                leftover = stream
-            else:
-                self._stream = stream
-                self._mic_closed.clear()
-                self._capturing = True
-                self._phase = "recording"
-                leftover = None
-        if leftover is not None:
-            self._close_stream(leftover)
-            logs.event(f"dictation: discarded microphone opened after cancel gen {gen}")
-            return
-        logs.event(f"dictation: started gen {gen}")
-        self._state()
-
-    def _wait_mic(self, gen):
-        deadline = time.time() + 1.0
-        while not self._mic_closed.is_set():
-            with self._lock:
-                if gen != self._gen or self._phase != "arming":
-                    logs.event(f"dictation: openMic skipped gen {gen}")
-                    return False
-            if time.time() > deadline:
-                logs.event("dictation: previous microphone did not close in time")
-                return True
-            self._mic_closed.wait(0.05)
-        return True
-
-    def stop(self):
-        with self._lock:
-            if self._phase == "arming":
-                self._gen += 1
+            if not self._stream_ok():
                 self._phase = "idle"
                 self.recording = False
                 self._capturing = False
-                kind = "arm"
-            elif self._phase == "recording":
-                gen = self._gen
-                self._phase = "finalizing"
-                self.recording = False
-                self._capturing = False
-                stream, self._stream = self._stream, None
-                frames, self._frames = self._frames, []
-                kind = "record"
+                failed = True
             else:
+                pre = self._ring.snapshot()
+                self._frames = [pre] if pre.size else []
+                self._pre_samples = int(pre.size)
+                self._pressed_at = pressed
+                self._first_live_at = None
+                self._capturing = True
+                failed = False
+                pre_s = pre.size / SR
+        if failed:
+            logs.event("dictation: microphone not running")
+            self._state()
+            return
+        # Chime after the stream is already up, and without waiting to record.
+        # A cold open happened before this call returns to the chime, so the device
+        # change and the tone are not in the same moment on a warm microphone.
+        chime_ok = self._chime("start")
+        if just_opened:
+            logs.event("dictation: microphone was just opened before the chime")
+        label = {True: "played", False: "FAILED"}.get(chime_ok, "off")
+        logs.event(f"dictation: capture gen {gen} chime={label} pre-roll {pre_s * 1000:.0f}ms")
+        self._state()
+
+    def stop(self):
+        with self._lock:
+            if self._phase != "recording":
                 return
+            gen = self._gen
+            self._capturing = False
+            self._phase = "finalizing"
+            self.recording = False
+            frames = self._frames
+            self._frames = []
+            pre = self._pre_samples
+            pressed = self._pressed_at
+            first = self._first_live_at
+            self._ring.clear()
         self._state()
         self._chime("stop")
-        if kind == "arm":
-            logs.event("dictation: cancelled before microphone opened")
-            return
-        threading.Thread(target=self._finish, args=(stream, frames, gen), daemon=True, name="dictation-stop").start()
-
-    def _finish(self, stream, frames, gen):
-        self._close_stream(stream)
         audio = np.concatenate(frames) if frames else np.zeros(0, np.float32)
-        logs.event(f"dictation: stopped gen {gen}, {len(audio) / SR:.1f}s of audio")
+        live = max(0, len(audio) - pre)
+        lat = ((first - pressed) * 1000.0) if first is not None and pressed is not None else -1.0
+        logs.event(
+            f"dictation: stopped gen {gen} audio {len(audio) / SR:.2f}s "
+            f"pre-roll {pre / SR * 1000:.0f}ms live {live / SR:.2f}s first-buffer {lat:.0f}ms"
+        )
+        if live < int(SR * _MIN_LIVE_S):
+            logs.event("dictation: too short, ignored")
+            with self._lock:
+                if self._gen == gen and self._phase == "finalizing":
+                    self._phase = "idle"
+            self._state()
+            return
+        threading.Thread(target=self._finish, args=(audio, gen), daemon=True, name="dictation-stop").start()
+
+    def _finish(self, audio, gen):
         try:
-            self._transcribe(audio)
+            self._transcribe(audio, gen)
         finally:
             with self._lock:
                 if self._gen == gen and self._phase == "finalizing":
                     self._phase = "idle"
 
-    def _close_stream(self, stream):
-        try:
-            if stream is not None:
-                stream.stop()
-                stream.close()
-        except Exception:
-            pass
-        self._mic_closed.set()
-
     def _chime(self, kind):
         chime_on = True if self.settings is None else bool(self.settings["chime"])
         if not chime_on or self.player is None:
-            return False
+            logs.event(f"dictation: {kind} chime skipped")
+            return None
         try:
             ok = self.player.play_chime(kind)
         except Exception as e:
-            logs.event(f"dictation: {kind} chime failed: {e!r}")
+            logs.event(f"dictation: {kind} chime FAILED {e!r}")
             return False
         if ok is False:
             logs.event(f"dictation: {kind} chime FAILED")
             return False
-        logs.event(f"dictation: {kind} chime started")
         return True
 
-    def _transcribe(self, audio):
-        if len(audio) < SR * 0.3:
+    def _transcribe(self, audio, gen):
+        dur = len(audio) / SR
+        if dur < _MIN_LIVE_S:
             logs.event("dictation: too short, ignored")
             return
         for _ in range(100):
@@ -192,19 +201,26 @@ class Dictation:
         if self._model is None:
             logs.event("dictation: no model")
             return
+        chunks = split_pcm(audio, SR, _SEGMENT_S)
+        logs.event(f"dictation: transcribing gen {gen} {dur:.2f}s in {len(chunks)} segment(s)")
         t0 = time.time()
-        # One model call at a time. A new hold may already be recording while this audio
-        # is still transcribing; the next transcript waits instead of using Whisper concurrently.
+        parts = []
+        # One model call at a time, and the paste happens before the next session's
+        # transcript, so rapid holds stay in order and are not merged.
         with self._transcribe_lock:
-            try:
-                segs, _ = self._model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
-                text = " ".join(s.text.strip() for s in segs).strip()
-            except Exception as e:
-                logs.event(f"dictation: transcribe failed: {e!r}")
-                return
-            logs.event(f"dictation: transcribed {len(text)} chars in {time.time() - t0:.1f}s")
+            for i, chunk in enumerate(chunks):
+                try:
+                    segs, _ = self._model.transcribe(chunk, language="en", beam_size=1, vad_filter=False)
+                    text = " ".join(s.text.strip() for s in segs).strip()
+                except Exception as e:
+                    logs.event(f"dictation: segment {i + 1} failed: {e!r}")
+                    text = ""
+                logs.event(f"dictation: segment {i + 1}/{len(chunks)} {len(chunk) / SR:.2f}s -> {len(text)} chars")
+                parts.append(text)
+            text = join_segments(parts)
+            logs.event(f"dictation: gen {gen} audio {dur:.2f}s transcript {len(text)} chars in {time.time() - t0:.1f}s")
             if text:
-                type_text(text)
+                insert_dictation(text)
 
     def _state(self):
         if self.on_state:

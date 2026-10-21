@@ -68,37 +68,76 @@ final class Player: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate
 
 
 /// Short dictation start/stop tones (kept off the speech queue so they never block a read).
+///
+/// The players are built once and retained. Each press stops and rewinds the same object
+/// so a second chime is not dropped because the previous NSSound is still alive, and so
+/// play() is not racing a brand-new player against an audio-engine reconfigure.
 enum Chime {
-  /// How long dictation waits after a successful start chime before opening the mic.
-  static let leadIn: TimeInterval = 0.16
-  private static var player: AVAudioPlayer?
-  private static var sound: NSSound?
+  private static var startSound: NSSound?
+  private static var stopSound: NSSound?
+  private static var startPlayer: AVAudioPlayer?
+  private static var stopPlayer: AVAudioPlayer?
+  private static var loaded = false
 
-  /// Plays the tone. NSSound is not tied to the capture engine, so the chime is audible
-  /// even when a microphone session is about to start. Returns false if nothing started.
+  static func preload() {
+    if !Thread.isMainThread {
+      DispatchQueue.main.async { preload() }
+      return
+    }
+    guard !loaded else { return }
+    loaded = true
+    startSound = makeSound("start")
+    stopSound = makeSound("stop")
+    startPlayer = makePlayer("start")
+    stopPlayer = makePlayer("stop")
+    Log.event("chime: preloaded NSSound start=\(startSound != nil) stop=\(stopSound != nil) AVAudioPlayer start=\(startPlayer != nil) stop=\(stopPlayer != nil)")
+  }
+
+  /// Play on the main thread. Returns whether a player reported that playback started.
   @discardableResult
   static func play(_ kind: String) -> Bool {
-    let data = wav(kind)
-    if let s = NSSound(data: data) {
-      s.volume = 1
-      sound = s
-      if s.play() { return true }
-      Log.event("chime \(kind): NSSound.play() returned false")
+    if !Thread.isMainThread {
+      Log.event("chime \(kind): not on main thread (\(Thread.current.name ?? "unnamed")); hopping")
+      DispatchQueue.main.async { _ = play(kind) }
+      return false
+    }
+    preload()
+    let sound = kind == "start" ? startSound : stopSound
+    if let s = sound {
+      let was = s.isPlaying
+      if was { s.stop() }
+      s.currentTime = 0
+      let ok = s.play()
+      Log.event("chime \(kind): NSSound main=true wasPlaying=\(was) rewind result=\(ok) t=\(s.currentTime)")
+      if ok { return true }
     } else {
-      Log.event("chime \(kind): NSSound could not read WAV")
+      Log.event("chime \(kind): NSSound missing")
     }
-    do {
-      let p = try AVAudioPlayer(data: data)
-      p.volume = 1
-      player = p
+    let player = kind == "start" ? startPlayer : stopPlayer
+    if let p = player {
+      let was = p.isPlaying
+      if was { p.stop() }
+      p.currentTime = 0
       p.prepareToPlay()
-      if p.play() { return true }
-      Log.event("chime \(kind): AVAudioPlayer.play() returned false")
-      return false
-    } catch {
-      Log.event("chime error: \(error)")
-      return false
+      let ok = p.play()
+      Log.event("chime \(kind): AVAudioPlayer fallback wasPlaying=\(was) rewind result=\(ok)")
+      return ok
     }
+    Log.event("chime \(kind): FAILED no retained player")
+    return false
+  }
+
+  private static func makeSound(_ kind: String) -> NSSound? {
+    guard let s = NSSound(data: wav(kind)) else { return nil }
+    s.volume = 1
+    return s
+  }
+
+  private static func makePlayer(_ kind: String) -> AVAudioPlayer? {
+    guard let p = try? AVAudioPlayer(data: wav(kind)) else { return nil }
+    p.volume = 1
+    p.prepareToPlay()
+    return p
   }
 
   private static func wav(_ kind: String) -> Data {

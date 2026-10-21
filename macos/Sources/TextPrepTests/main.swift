@@ -37,6 +37,27 @@ check(!BabbleGuard.check(text: "I couldn't hear it myself, so give Option plus a
 check(!BabbleGuard.check(text: "This sentence has exactly eight words in it.", seconds: 12, phonemes: 36).ok, "guard catches too long")
 check(chunks("").isEmpty && chunks("   \n\u{200B} 🎉 \n").isEmpty, "empty input")
 
+// Dictation spacing and segment concatenation (same rules as windows/saytray/spacing.py).
+check(DictationSpacing.apply("there", previous: nil) == "there", "no space at empty field")
+check(DictationSpacing.apply("there", previous: " ") == "there", "no double space")
+check(DictationSpacing.apply("there", previous: "\n") == "there", "no space after newline")
+check(DictationSpacing.apply("there", previous: "o") == " there", "space after a word")
+check(DictationSpacing.apply(" there", previous: "o") == " there", "text already spaced")
+check(DictationSpacing.apply(", and", previous: "o") == ", and", "punctuation is not spaced")
+check(DictationSpacing.apply("(note)", previous: "o") == "(note)", "opening punct is not spaced")
+check(DictationSpacing.merge("hello there", "friend") == "hello there friend", "segment append")
+check(DictationSpacing.merge("hello world", "hello world and more") == "hello world and more", "partial grew")
+check(DictationSpacing.merge("hello world", "hello") == "hello world", "shorter partial kept")
+check(DictationSpacing.join(["the start of the sentence", "only the end"]) == "the start of the sentence only the end", "long dictation keeps the start")
+func spaced(_ parts: [String]) -> String {
+  var typed = ""
+  for p in parts { typed += DictationSpacing.apply(p, previous: typed.last) }
+  return typed
+}
+check(spaced(["hello", "there"]) == "hello there", "back to back words")
+check(spaced(["hello", "there", "friend"]) == "hello there friend", "three inserts in order")
+check(spaced(["hello\n", "there"]) == "hello\nthere", "newline then word")
+
 // Corpus invariants
 let dir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Tests/corpus"
 let allowed = CharacterSet.letters.union(.decimalDigits).union(CharacterSet(charactersIn: " .,!?;:'()-"))
