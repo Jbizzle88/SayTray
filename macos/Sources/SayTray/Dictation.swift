@@ -8,23 +8,35 @@ import SBObjC
 /// Built-in and wired inputs stay warm for about 10 minutes. Bluetooth and hands-free
 /// inputs are released quickly so headphone audio is not stuck in a call profile.
 enum InputRoute {
-  static func releasesQuickly() -> Bool {
+  /// "wired" keeps the long pre-roll. "hands-free" and "unknown" use the short timeout.
+  static func kind() -> String {
+    let device = defaultDevice()
+    if device == 0 { return "unknown" }
     let transport = defaultTransport()
     if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE {
-      return true
+      return "hands-free"
     }
-    let name = defaultName().lowercased()
-    return name.contains("bluetooth") || name.contains("airpod")
-      || name.contains("hands-free") || name.contains("hands free")
-      || name.contains(" ag audio") || name.contains("hfp") || name.contains("hsp")
+    let name = defaultName()
+    if nameLooksHandsFree(name) { return "hands-free" }
+    if transport == 0 { return "unknown" }
+    return "wired"
   }
 
-  static func idleSeconds() -> TimeInterval { releasesQuickly() ? 20 : 600 }
+  static func releasesQuickly() -> Bool { kind() != "wired" }
+
+  static func idleSeconds() -> TimeInterval { kind() == "wired" ? 600 : 20 }
 
   static func describe() -> String {
     let name = defaultName()
-    let kind = releasesQuickly() ? "hands-free" : "wired"
-    return "\(kind) \(name.isEmpty ? "unknown input" : name)"
+    return "\(kind()) \(name.isEmpty ? "unknown input" : name)"
+  }
+
+  private static func nameLooksHandsFree(_ name: String) -> Bool {
+    let low = name.lowercased()
+    if low.hasPrefix("headset (") { return true }
+    return low.contains("bluetooth") || low.contains("airpod")
+      || low.contains("hands-free") || low.contains("hands free")
+      || low.contains(" ag audio") || low.contains("hfp") || low.contains("hsp")
   }
 
   private static func defaultDevice() -> AudioDeviceID {
@@ -45,10 +57,13 @@ enum InputRoute {
       mSelector: kAudioDevicePropertyDeviceNameCFString,
       mScope: kAudioObjectPropertyScopeGlobal,
       mElement: kAudioObjectPropertyElementMain)
-    var name: CFString = "" as CFString
-    var size = UInt32(MemoryLayout<CFString>.size)
-    let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name)
-    return status == noErr ? (name as String) : ""
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else { return "" }
+    let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<CFString>.alignment)
+    defer { raw.deallocate() }
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return "" }
+    let cf = raw.load(as: CFString.self)
+    return cf as String
   }
 
   private static func defaultTransport() -> UInt32 {
@@ -77,6 +92,8 @@ final class Dictation {
 
   private let preRollLimit = 0.45
   private let segmentLimit = DictationPlan.segmentLimit
+  /// Copied onto both sides of a 30 s cut so a word on the boundary is heard twice, then deduped.
+  private let sliceOverlap = 1.0
   private let minLive = 0.15
   private let graceSeconds = 0.25
 
@@ -111,16 +128,17 @@ final class Dictation {
       DispatchQueue.main.async { self.warmMicrophone() }
       return false
     }
-    idleWork?.cancel()
-    idleWork = nil
     guard Permissions.mic == .authorized else {
       Log.event("dictation: pre-roll waiting for microphone permission")
       return false
     }
+    // Already running: leave the one idle timer alone. A modifier tap must not
+    // cancel it or start a second one.
     if let eng = engine, eng.isRunning {
-      if phase == .idle { scheduleMicIdle() }
       return false
     }
+    idleWork?.cancel()
+    idleWork = nil
     let created = engine == nil
     let eng = engine ?? AVAudioEngine()
     if created {
@@ -384,7 +402,7 @@ final class Dictation {
     guard !pumping, !jobs.isEmpty else { return }
     pumping = true
     let job = jobs.removeFirst()
-    let chunks = split(job.buffers)
+    let chunks = withOverlap(split(job.buffers))
     Log.event("dictation: kept \(sec(job.seconds))s in \(job.buffers.count) buffers with no duration cap; \(chunks.count) slices of <=\(Int(segmentLimit))s, \(jobs.count) still queued")
     recognizeAll(chunks, index: 0, parts: []) { [weak self] text in
       guard let self else { return }
@@ -423,6 +441,30 @@ final class Dictation {
     }
     if !cur.isEmpty { chunks.append(cur) }
     return chunks
+  }
+
+  /// Repeat about a second of audio across each cut. The same buffer object is shared;
+  /// recognition reads it and does not take ownership.
+  private func withOverlap(_ chunks: [[AVAudioPCMBuffer]]) -> [[AVAudioPCMBuffer]] {
+    guard chunks.count > 1, sliceOverlap > 0 else { return chunks }
+    func taking(_ buffers: [AVAudioPCMBuffer], fromEnd: Bool) -> [AVAudioPCMBuffer] {
+      var acc = 0.0
+      var picked: [AVAudioPCMBuffer] = []
+      let order = fromEnd ? Array(buffers.reversed()) : buffers
+      for b in order {
+        picked.append(b)
+        acc += seconds(b)
+        if acc >= sliceOverlap { break }
+      }
+      return fromEnd ? Array(picked.reversed()) : picked
+    }
+    return chunks.indices.map { i in
+      var piece: [AVAudioPCMBuffer] = []
+      if i > 0 { piece.append(contentsOf: taking(chunks[i - 1], fromEnd: true)) }
+      piece.append(contentsOf: chunks[i])
+      if i + 1 < chunks.count { piece.append(contentsOf: taking(chunks[i + 1], fromEnd: false)) }
+      return piece
+    }
   }
 
   /// Index of a quiet buffer in the last 0.35 s, or `buffers.count` when the cut stays at the limit.
@@ -479,7 +521,7 @@ final class Dictation {
 
   private func recognizeAll(_ chunks: [[AVAudioPCMBuffer]], index: Int, parts: [String], done: @escaping (String) -> Void) {
     if index >= chunks.count {
-      done(DictationSpacing.join(parts))
+      done(DictationSpacing.joinOverlapped(parts))
       return
     }
     let audio = audioSeconds(chunks[index])

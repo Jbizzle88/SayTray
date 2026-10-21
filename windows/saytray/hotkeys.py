@@ -7,8 +7,10 @@ key when the modifiers never come up).
 """
 import queue, threading
 from . import logs
-from .chord import ChordTracker, ModifierArm
+from .chord import ChordTracker, ModifierArm, canonical, chord_parts
 from .config import hotkey_registerable
+
+_ARM_DELAY_S = 0.15
 
 
 class HotkeySerial:
@@ -45,6 +47,8 @@ class Hotkeys:
         self._on_up = None
         self._on_arm = None
         self._on_unusable = None
+        self._arm_timer = None
+        self._dictate_main = ""
 
     def register(self, read_combo, on_read, dictate_combo, on_down, on_up, on_arm=None, on_unusable=None):
         import keyboard
@@ -56,6 +60,8 @@ class Hotkeys:
         self._bind(keyboard, dictate_combo, lambda: None, suppress=True)
         self._tracker = ChordTracker(dictate_combo)
         self._arm = ModifierArm(dictate_combo)
+        parts = chord_parts(dictate_combo)
+        self._dictate_main = parts[-1] if len(parts) > 1 else ""
         self._on_down, self._on_up, self._on_arm = on_down, on_up, on_arm
         self._hook = keyboard.hook(self._event)
         logs.event(f"hotkeys registered: read={read_combo} dictate(hold)={dictate_combo}")
@@ -85,8 +91,14 @@ class Hotkeys:
             return
         import keyboard
         is_down = e.event_type == keyboard.KEY_DOWN
-        if self._arm is not None and self._arm.event(e.name, is_down) and self._on_arm:
-            self._on_arm()
+        key = canonical(e.name)
+        if self._arm is not None and self._arm.mods and self._arm.event(e.name, is_down):
+            self._schedule_arm()
+        if is_down and self._dictate_main:
+            if key == self._dictate_main:
+                self._flush_arm()
+            elif self._arm is None or key not in self._arm.mods:
+                self._cancel_arm()
         action = tracker.event(e.name, is_down)
         if action == "down" and self._on_down:
             self._on_down()
@@ -113,3 +125,24 @@ class Hotkeys:
         if self._arm is not None:
             self._arm.reset()
         self._arm = None
+        self._cancel_arm()
+        self._dictate_main = ""
+
+    def _schedule_arm(self):
+        """Wait briefly so a read-hotkey or other key can cancel the pre-warm."""
+        self._cancel_arm()
+        timer = threading.Timer(_ARM_DELAY_S, self._flush_arm)
+        timer.daemon = True
+        self._arm_timer = timer
+        timer.start()
+
+    def _cancel_arm(self):
+        timer = self._arm_timer
+        self._arm_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _flush_arm(self):
+        self._cancel_arm()
+        if self._on_arm:
+            self._on_arm()

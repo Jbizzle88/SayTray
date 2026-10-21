@@ -254,8 +254,45 @@ _check_cancel()
 
 req_lines = [line.strip() for line in req if line.strip() and not line.strip().startswith("#")]
 check(all("==" in line for line in req_lines), f"every Windows requirement is pinned: {req_lines}")
-for pin in ("faster-whisper==1.2.1", "ctranslate2==4.8.3", "numpy==2.5.4", "sounddevice==0.5.6"):
-    check(pin in req_lines, f"requirements pin {pin}")
+req_text = "\n".join(req)
+for pin in (
+    'numpy==2.2.6; python_version < "3.11"',
+    'numpy==2.4.6; python_version == "3.11"',
+    'numpy==2.5.4; python_version >= "3.12"',
+    'pillow==12.3.0; python_version < "3.11"',
+    'pillow==13.0.0; python_version >= "3.11"',
+    "faster-whisper==1.2.1",
+    "ctranslate2==4.8.3",
+    "sounddevice==0.5.6",
+    "piper-tts==1.8.0",
+):
+    check(pin in req_text, f"requirements pin {pin}")
+
+def _check_trust_quick():
+    vid_file = "voice.onnx"
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, vid_file)
+        with open(path, "wb") as fh:
+            fh.write(b"x" * 32)
+        voice = {"id": "t", "files": [{"filename": vid_file, "sizeBytes": 32, "sha256": "abc"}]}
+        def boom(_path):
+            raise AssertionError("the menu check hashed a model")
+        old = voices.sha256_file
+        voices.sha256_file = boom
+        try:
+            check(voices.is_installed_quick(voice, d) is False, "a right-size file without a marker is not trusted yet")
+            voices.write_hash_marker(path, "abc")
+            with open(path + ".partial", "w", encoding="utf-8") as fh:
+                fh.write("partial")
+            check(voices.is_installed_quick(voice, d) is True, "a matching marker is trusted without hashing")
+            voices.discard_written([path])
+            check(not os.path.exists(path), "a failed download removes the file")
+            check(not os.path.exists(path + ".partial"), "a failed download removes the partial")
+            check(not os.path.exists(path + ".sha256"), "a failed download removes the hash marker")
+        finally:
+            voices.sha256_file = old
+
+_check_trust_quick()
 
 print(f"Voice catalog tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)

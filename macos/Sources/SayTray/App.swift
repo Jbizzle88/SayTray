@@ -19,6 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     registerHotKeys()
     Log.purgeLegacyOnce()
     VoiceCatalog.removeRetired()
+    VoiceCatalog.trustInBackground { [weak self] in
+      DispatchQueue.main.async {
+        VoiceLibrary.shared.refresh()
+        self?.speaker.warmUp()
+      }
+    }
     speaker.warmUp()
     Chime.preload()
     #if DEBUG
@@ -55,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   private func registerHotKeys() {
     HotKeyCenter.shared.set(id: 1, key: st.readKey, down: { [weak self] in self?.readSelection() })
-    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() }, arm: { [weak self] in
+    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() },     arm: { [weak self] in
+      guard InputRoute.kind() == "wired" else { return }
       if self?.dictation.warmMicrophone() == true {
         Log.event("dictation: pre-roll re-warmed on modifier")
       }

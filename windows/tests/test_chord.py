@@ -86,5 +86,82 @@ check(arm.event("alt", False) is False and arm.event("alt", True) is True, "rele
 alone = ModifierArm("ctrl+alt+space")
 check(alone.event("space", True) is False, "space alone does not warm the mic")
 
+# AltGr types characters on a German layout. It must not open the microphone.
+# The real chord still treats AltGr as Alt, so Ctrl+AltGr+Space can dictate.
+gr = ModifierArm("ctrl+alt+space")
+check(gr.event("ctrl", True) is False, "ctrl alone does not arm")
+check(gr.event("alt gr", True) is False, "AltGr does not arm")
+check(gr.event("q", True) is False, "AltGr+Q does not arm")
+right = ModifierArm("ctrl+alt+space")
+check(right.event("ctrl", True) is False and right.event("right alt", True) is False, "right alt does not arm")
+check(right.event("altgr", True) is False, "altgr does not arm")
+left = ModifierArm("ctrl+alt+space")
+check(left.event("ctrl", True) is False and left.event("left alt", True) is True, "left alt still arms")
+f13 = ModifierArm("f13")
+check(f13.event("ctrl", False) is False and f13.event("f13", True) is False, "a key with no modifiers does not arm")
+
+import time, types
+kb = types.ModuleType("keyboard")
+kb.KEY_DOWN = "down"
+kb.KEY_UP = "up"
+kb.parse_hotkey = lambda combo: combo
+kb.add_hotkey = lambda *a, **k: object()
+kb.remove_hotkey = lambda h: None
+kb.hook = lambda fn: fn
+kb.unhook = lambda h: None
+_prev = sys.modules.get("keyboard")
+sys.modules["keyboard"] = kb
+from saytray.hotkeys import Hotkeys
+
+class _Ev:
+    def __init__(self, name, down):
+        self.name = name
+        self.event_type = "down" if down else "up"
+
+arms = []
+hk = Hotkeys()
+try:
+    hk.register("alt+`", lambda: None, "ctrl+alt+space", lambda: None, lambda: None, on_arm=lambda: arms.append(1))
+    hk._event(_Ev("ctrl", True))
+    hk._event(_Ev("alt", True))
+    pending = hk._arm_timer
+    check(pending is not None and abs(pending.interval - 0.15) < 0.001, "modifiers wait before warming")
+    hk._event(_Ev("`", True))
+    check(hk._arm_timer is None and arms == [], "a following read key cancels the warm")
+    hk._event(_Ev("alt", False))
+    hk._event(_Ev("alt", True))
+    first = hk._arm_timer
+    hk._event(_Ev("alt", False))
+    hk._event(_Ev("alt", True))
+    second = hk._arm_timer
+    check(first is not None and second is not None and first is not second and first.finished.is_set(), "a new arm replaces the previous timer")
+    hk._event(_Ev("space", True))
+    check(arms == [1] and hk._arm_timer is None, "the dictate key warms immediately and does not leave a timer")
+    arms.clear()
+    hk.clear()
+    hk.register("alt+`", lambda: None, "ctrl+alt+space", lambda: None, lambda: None, on_arm=lambda: arms.append(1))
+    hk._event(_Ev("ctrl", True))
+    hk._event(_Ev("alt gr", True))
+    hk._event(_Ev("q", True))
+    check(arms == [] and hk._arm_timer is None, "AltGr+Q does not schedule a warm")
+    hk.clear()
+    hk.register("alt+`", lambda: None, "f13", lambda: None, lambda: None, on_arm=lambda: arms.append(1))
+    hk._event(_Ev("ctrl", False))
+    hk._event(_Ev("f13", True))
+    time.sleep(0.05)
+    check(arms == [] and hk._arm_timer is None, "F13 does not pre-warm")
+    hk.clear()
+    hk.register("alt+`", lambda: None, "ctrl+alt+space", lambda: None, lambda: None, on_arm=lambda: arms.append(1))
+    hk._event(_Ev("ctrl", True))
+    hk._event(_Ev("left alt", True))
+    time.sleep(0.4)
+    check(arms == [1], f"the warm runs once the wait ends: {arms}")
+finally:
+    hk.clear()
+    if _prev is None:
+        sys.modules.pop("keyboard", None)
+    else:
+        sys.modules["keyboard"] = _prev
+
 print(f"Chord tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)

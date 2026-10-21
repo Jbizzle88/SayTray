@@ -8,7 +8,7 @@ from .speaker import Speaker
 from .dictation import Dictation
 from .hotkeys import HotkeySerial, Hotkeys
 from .selection import read_selection
-from .voices import (default_voice, downloads, format_size, installed_ids, normalize_speaker,
+from .voices import (default_voice, downloads, format_size, installed_ids, is_installed_quick, normalize_speaker, start_trust_check,
                      on_after_delete, on_before_delete, pretty_voice, remove_retired_voices, voice_size, voices)
 from . import logs, selection, settings_ui, startup
 
@@ -83,6 +83,15 @@ class App:
         downloads.add_listener(self._download_update)
         self.icon = pystray.Icon("SayTray", _icon("idle"), "SayTray", menu=self._menu())
 
+        def _voices_trusted():
+            try:
+                self.speaker.warm_up()
+                self.icon.menu = self._menu()
+                self.icon.update_menu()
+            except Exception:
+                pass
+        start_trust_check(on_done=_voices_trusted)
+
     # actions
     def read(self):
         if self.speaker.speaking:
@@ -152,7 +161,7 @@ class App:
         for v in voices():
             vid = v["id"]
             label = pretty_voice(vid)
-            if vid in installed_ids():
+            if is_installed_quick(v):
                 speakers = v.get("speakers") or []
                 if speakers:
                     def set_sp(sid, vid=vid):

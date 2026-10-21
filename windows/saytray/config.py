@@ -221,6 +221,8 @@ class Settings:
         if voice != self.data.get("voice"):
             self.data["voice"] = voice
         self.listeners = []
+        self._unreadable = not should_write
+        self._held = {}
         if should_write:
             dirty = any(self.data.get(k) != (raw or {}).get(k) for k in self.data)
         else:
@@ -239,10 +241,31 @@ class Settings:
 
     def set(self, **kw):
         with self._lock:
-            merged = dict(self.data)
-            merged.update(kw)
-            self.data = sanitize(merged)
-            self._write()
+            if self._unreadable:
+                # The file could not be read. Keep this change in memory, and when the
+                # file can be read again merge only these changes onto it.
+                self._held.update(kw)
+                raw, should = read_settings(PATH)
+                if not should:
+                    merged = dict(self.data)
+                    merged.update(kw)
+                    self.data = sanitize(merged)
+                else:
+                    base = sanitize(raw or {})
+                    base.update(self._held)
+                    self.data = sanitize(base)
+                    try:
+                        self._write()
+                    except OSError:
+                        self._unreadable = True
+                    else:
+                        self._unreadable = False
+                        self._held = {}
+            else:
+                merged = dict(self.data)
+                merged.update(kw)
+                self.data = sanitize(merged)
+                self._write()
         for cb in list(self.listeners):
             try:
                 cb(kw)
