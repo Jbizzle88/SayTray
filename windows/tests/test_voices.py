@@ -98,6 +98,10 @@ def write_voice(directory, voice_id):
         path = os.path.join(directory, f["filename"])
         with open(path, "wb") as fh:
             fh.truncate(int(f["sizeBytes"]))
+        sha = (f.get("sha256") or "").strip()
+        if sha:
+            with open(path + ".sha256", "w", encoding="utf-8") as fh:
+                fh.write(sha + "\n")
 
 with tempfile.TemporaryDirectory() as d:
     for voice_id in banned:
@@ -123,6 +127,15 @@ with tempfile.TemporaryDirectory() as d:
     check(voices.installed_ids(d) == ["en_US-norman-medium"], "Norman files stay after a delete attempt")
     voices.delete_voice("en_US-ljspeech-high", d)
     check(not os.path.exists(short), "a non-default voice can be deleted")
+    norman = voices.by_id("en_US-norman-medium")
+    small = next(f for f in norman["files"] if f["filename"].endswith(".onnx.json"))
+    corrupt = os.path.join(d, small["filename"])
+    os.remove(corrupt + ".sha256")
+    check(not voices.file_trusted(corrupt, small["sizeBytes"], small["sha256"]), "a right-size file with no matching hash is not installed")
+    check(not voices.is_installed(norman, d), "Norman is not installed when a file's hash does not match")
+    voices.write_hash_marker(corrupt, small["sha256"])
+    check(voices.file_trusted(corrupt, small["sizeBytes"], small["sha256"]), "a matching .sha256 marker is trusted")
+    check(voices.is_installed(norman, d), "marker restores the installed check without re-reading the model")
 
 def head(url):
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "SayTray"})
@@ -169,6 +182,7 @@ def _check_downloader():
                 f"http://127.0.0.1:{server.server_address[1]}/sample.onnx",
                 dest, 0, len(payload), len(payload), "sample", sha=good)
             check(open(dest, "rb").read() == payload, "downloader writes the response")
+            check(open(dest + ".sha256", encoding="utf-8").read().strip() == good, "downloader writes the hash marker")
             mismatch = os.path.join(d, "mismatch.onnx")
             bad_hash = False
             bad_msg = ""
@@ -207,6 +221,41 @@ def _check_downloader():
         server.shutdown()
 
 _check_downloader()
+
+def _check_cancel():
+    vid = "en_US-kristin-medium"
+    dl = voices.Downloads()
+    try:
+        dl._current = "busy"
+        dl._cancel.add(vid)
+        dl.start(vid)
+        check(vid not in dl._cancel, "starting a download clears a stale cancel flag")
+        check(vid in dl._queue, "the voice is queued again")
+        check(dl._current == "busy", "a busy worker is not replaced")
+        dl.cancel(vid)
+        check(dl.status(vid)["state"] == "idle", "cancelling a queued voice returns it to idle")
+        check(vid not in dl._cancel and vid not in dl._queue, "a queued cancel is not remembered")
+        dl.start(vid)
+        check(vid in dl._queue and vid not in dl._cancel, "download works again after cancel")
+        dl._queue = [v for v in dl._queue if v != vid]
+        dl._status[vid] = {"state": "done", "fraction": 1.0, "message": "Downloaded"}
+        dl.cancel(vid)
+        check(vid not in dl._cancel, "a late cancel is ignored")
+        check(dl.status(vid)["state"] == "done", "a late cancel does not mark the voice as failed")
+        other = voices.Downloads()
+        other._current = vid
+        other._cancel.add(vid)
+        check(other.start(vid) is True and vid in other._again and vid not in other._cancel, "a click during cancel asks for a restart")
+        other.shutdown()
+    finally:
+        dl.shutdown()
+
+_check_cancel()
+
+req_lines = [line.strip() for line in req if line.strip() and not line.strip().startswith("#")]
+check(all("==" in line for line in req_lines), f"every Windows requirement is pinned: {req_lines}")
+for pin in ("faster-whisper==1.2.1", "ctranslate2==4.8.3", "numpy==2.5.4", "sounddevice==0.5.6"):
+    check(pin in req_lines, f"requirements pin {pin}")
 
 print(f"Voice catalog tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)

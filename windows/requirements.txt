@@ -1,13 +1,14 @@
-# Python 3.10 or newer. piper-tts is pinned. Other packages are installed
-# at the versions pip resolves for that Python; do not guess those pins.
+# Python 3.10 or newer. Versions below are the releases verified against this tree
+# (faster-whisper 1.2.1 and ctranslate2 4.8.3 match the QA environment).
 piper-tts==1.8.0
-regex
-numpy
-sounddevice
-audiotsm
-pystray
-pillow
-keyboard
-pyperclip
-comtypes
-faster-whisper
+faster-whisper==1.2.1
+ctranslate2==4.8.3
+regex==2026.9.29
+numpy==2.5.4
+sounddevice==0.5.6
+audiotsm==0.1.2
+pystray==0.19.5
+pillow==13.0.0
+keyboard==0.13.5
+pyperclip==1.11.0
+comtypes==1.4.17

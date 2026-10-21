@@ -1,8 +1,69 @@
 import AppKit
 import AVFoundation
 import Speech
+import CoreAudio
 import SayTrayCore
 import SBObjC
+
+/// Built-in and wired inputs stay warm for about 10 minutes. Bluetooth and hands-free
+/// inputs are released quickly so headphone audio is not stuck in a call profile.
+enum InputRoute {
+  static func releasesQuickly() -> Bool {
+    let transport = defaultTransport()
+    if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE {
+      return true
+    }
+    let name = defaultName().lowercased()
+    return name.contains("bluetooth") || name.contains("airpod")
+      || name.contains("hands-free") || name.contains("hands free")
+      || name.contains(" ag audio") || name.contains("hfp") || name.contains("hsp")
+  }
+
+  static func idleSeconds() -> TimeInterval { releasesQuickly() ? 20 : 600 }
+
+  static func describe() -> String {
+    let name = defaultName()
+    let kind = releasesQuickly() ? "hands-free" : "wired"
+    return "\(kind) \(name.isEmpty ? "unknown input" : name)"
+  }
+
+  private static func defaultDevice() -> AudioDeviceID {
+    var device = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultInputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+    let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
+    return status == noErr ? device : 0
+  }
+
+  private static func defaultName() -> String {
+    let device = defaultDevice()
+    guard device != 0 else { return "" }
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyDeviceNameCFString,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+    var name: CFString = "" as CFString
+    var size = UInt32(MemoryLayout<CFString>.size)
+    let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name)
+    return status == noErr ? (name as String) : ""
+  }
+
+  private static func defaultTransport() -> UInt32 {
+    let device = defaultDevice()
+    guard device != 0 else { return 0 }
+    var transport: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyTransportType,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+    let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport)
+    return status == noErr ? transport : 0
+  }
+}
 
 /// Push-to-talk dictation. Every buffer from key-down to key-up is kept (the short ring
 /// is only a pre-roll and does not cap the session). After release, the whole clip is
@@ -18,7 +79,6 @@ final class Dictation {
   private let segmentLimit = DictationPlan.segmentLimit
   private let minLive = 0.15
   private let graceSeconds = 0.25
-  private let idleMicSeconds = 20.0
 
   private var engine: AVAudioEngine?
   private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) ?? SFSpeechRecognizer()
@@ -51,11 +111,16 @@ final class Dictation {
       DispatchQueue.main.async { self.warmMicrophone() }
       return false
     }
+    idleWork?.cancel()
+    idleWork = nil
     guard Permissions.mic == .authorized else {
       Log.event("dictation: pre-roll waiting for microphone permission")
       return false
     }
-    if let eng = engine, eng.isRunning { return false }
+    if let eng = engine, eng.isRunning {
+      if phase == .idle { scheduleMicIdle() }
+      return false
+    }
     let created = engine == nil
     let eng = engine ?? AVAudioEngine()
     if created {
@@ -75,7 +140,8 @@ final class Dictation {
       Log.event("dictation: pre-roll start failed \(exc ?? "") \(String(describing: startErr))")
       return false
     }
-    Log.event("dictation: pre-roll engine running")
+    Log.event("dictation: pre-roll engine running (\(InputRoute.describe()))")
+    if phase == .idle { scheduleMicIdle() }
     return true
   }
 
@@ -166,9 +232,11 @@ final class Dictation {
 
   private func scheduleMicIdle() {
     idleWork?.cancel()
+    let seconds = InputRoute.idleSeconds()
     let work = DispatchWorkItem { [weak self] in self?.releaseMicrophoneIfIdle() }
     idleWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + idleMicSeconds, execute: work)
+    Log.event("dictation: mic stays open for \(Int(seconds))s (\(InputRoute.describe()))")
+    DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
   }
 
   private func releaseMicrophoneIfIdle() {
@@ -189,7 +257,7 @@ final class Dictation {
     ring.removeAll()
     ringSeconds = 0
     audioLock.unlock()
-    Log.event("dictation: microphone released after idle")
+    Log.event("dictation: microphone released after idle (\(InputRoute.describe()))")
   }
 
   /// Stop the microphone and drop any clip still being recognized. Does not type.
@@ -249,7 +317,7 @@ final class Dictation {
     audioLock.unlock()
     phase = .recording
     setRecordingUI(true)
-    Log.event("dictation: capture gen \(gen) chime=\(chimeLabel) pre-roll \(Int((pre * 1000).rounded()))ms")
+    Log.event("dictation: capture gen \(gen) chime=\(chimeLabel) pre-roll \(Int((pre * 1000).rounded()))ms input=\(InputRoute.describe())")
   }
 
   private func handleRouteChange() {
@@ -339,15 +407,74 @@ final class Dictation {
     for b in buffers {
       let d = seconds(b)
       if t + d > segmentLimit, !cur.isEmpty {
-        chunks.append(cur)
-        cur = []
-        t = 0
+        let cut = quietCutIndex(cur)
+        if cut > 0, cut < cur.count {
+          chunks.append(Array(cur[..<cut]))
+          cur = Array(cur[cut...])
+          t = cur.reduce(0) { $0 + seconds($1) }
+        } else {
+          chunks.append(cur)
+          cur = []
+          t = 0
+        }
       }
       cur.append(b)
       t += d
     }
     if !cur.isEmpty { chunks.append(cur) }
     return chunks
+  }
+
+  /// Index of a quiet buffer in the last 0.35 s, or `buffers.count` when the cut stays at the limit.
+  /// Samples are not dropped and are not repeated.
+  private func quietCutIndex(_ buffers: [AVAudioPCMBuffer]) -> Int {
+    guard buffers.count > 1 else { return buffers.count }
+    let times = buffers.map { seconds($0) }
+    let total = times.reduce(0, +)
+    var acc = 0.0
+    var start = buffers.count
+    for i in 0..<buffers.count {
+      if total - acc <= 0.35 { start = i; break }
+      acc += times[i]
+    }
+    if start <= 0 || start >= buffers.count { return buffers.count }
+    let edge = bufferRMS(buffers[buffers.count - 1])
+    var best = buffers.count
+    var bestRMS = edge
+    var i = start
+    while i < buffers.count {
+      let rms = bufferRMS(buffers[i])
+      if rms < bestRMS {
+        bestRMS = rms
+        best = i
+      }
+      i += 1
+    }
+    if best > 0, best < buffers.count, bestRMS < 0.02, bestRMS < edge * 0.5 {
+      return best
+    }
+    return buffers.count
+  }
+
+  private func bufferRMS(_ b: AVAudioPCMBuffer) -> Float {
+    let n = Int(b.frameLength)
+    if n == 0 { return 1 }
+    if let ch = b.floatChannelData {
+      var sum: Float = 0
+      let p = ch[0]
+      for i in 0..<n { let s = p[i]; sum += s * s }
+      return sqrt(sum / Float(n))
+    }
+    if let ch = b.int16ChannelData {
+      var sum: Float = 0
+      let p = ch[0]
+      for i in 0..<n {
+        let s = Float(p[i]) / 32768
+        sum += s * s
+      }
+      return sqrt(sum / Float(n))
+    }
+    return 1
   }
 
   private func recognizeAll(_ chunks: [[AVAudioPCMBuffer]], index: Int, parts: [String], done: @escaping (String) -> Void) {

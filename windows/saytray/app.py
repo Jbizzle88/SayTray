@@ -10,7 +10,7 @@ from .hotkeys import HotkeySerial, Hotkeys
 from .selection import read_selection
 from .voices import (default_voice, downloads, format_size, installed_ids, normalize_speaker,
                      on_after_delete, on_before_delete, pretty_voice, remove_retired_voices, voice_size, voices)
-from . import logs, settings_ui, startup
+from . import logs, selection, settings_ui, startup
 
 DEBUG_DIR = os.path.join(logs.ROOT, "debug")
 
@@ -74,6 +74,8 @@ class App:
         self.hotkeys = Hotkeys()
         self._keys = HotkeySerial()
         self.dictation.on_notice = self._notice
+        selection.on_notice = self._notice
+        logs.purge_legacy_text_logs()
         self.speaker.on_state = self._update_icon
         self.dictation.on_state = self._update_icon
         on_before_delete(self._before_delete_voice)
@@ -93,9 +95,15 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def _register(self):
-        self.hotkeys.register(self.settings["read_hotkey"], self.read, self.settings["dictate_hotkey"],
-                              lambda: self._keys.submit(self.dictation.start),
-                              lambda: self._keys.submit(self.dictation.stop))
+        def unusable(combo):
+            self._notice(f"The shortcut {combo} doesn't match this keyboard layout, so it wasn't turned on.")
+        self.hotkeys.register(
+            self.settings["read_hotkey"], self.read, self.settings["dictate_hotkey"],
+            lambda: self._keys.submit(self.dictation.start),
+            lambda: self._keys.submit(self.dictation.stop),
+            on_arm=lambda: self._keys.submit(self.dictation.warm),
+            on_unusable=unusable,
+        )
 
     def _saved(self):
         self._register()

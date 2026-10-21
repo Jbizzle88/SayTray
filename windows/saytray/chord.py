@@ -28,6 +28,44 @@ def required_keys(combo):
     return {canonical(part) for part in (combo or "").split("+") if part.strip()}
 
 
+def chord_parts(combo):
+    return [canonical(part) for part in (combo or "").split("+") if part.strip()]
+
+
+class ModifierArm:
+    """Fires once when every modifier of a hold chord is down, before the main key.
+
+    Ctrl+Alt+Space arms when Ctrl and Alt are both down. Releasing either modifier
+    arms again the next time they are both down.
+    """
+
+    def __init__(self, combo):
+        parts = chord_parts(combo)
+        self.mods = set(parts[:-1]) if len(parts) > 1 else set()
+        self.down = set()
+        self.ready = False
+
+    def event(self, name, is_down):
+        key = canonical(name)
+        if key not in self.mods:
+            return False
+        if is_down:
+            self.down.add(key)
+        else:
+            self.down.discard(key)
+        now = bool(self.mods) and self.mods <= self.down
+        if now and not self.ready:
+            self.ready = True
+            return True
+        if not now:
+            self.ready = False
+        return False
+
+    def reset(self):
+        self.down.clear()
+        self.ready = False
+
+
 class ChordTracker:
     def __init__(self, combo):
         self.required = required_keys(combo)

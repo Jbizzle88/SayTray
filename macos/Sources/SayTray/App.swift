@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     st.onVoiceChanged = { [weak self] in self?.speaker.warmUp() }
     dictation.onText = { SelectionReader.type($0) }
     registerHotKeys()
+    Log.purgeLegacyOnce()
     VoiceCatalog.removeRetired()
     speaker.warmUp()
     Chime.preload()
@@ -54,7 +55,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   private func registerHotKeys() {
     HotKeyCenter.shared.set(id: 1, key: st.readKey, down: { [weak self] in self?.readSelection() })
-    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() }, hold: true)
+    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() }, arm: { [weak self] in
+      if self?.dictation.warmMicrophone() == true {
+        Log.event("dictation: pre-roll re-warmed on modifier")
+      }
+    }, hold: true)
   }
 
   @objc private func readSelection() {

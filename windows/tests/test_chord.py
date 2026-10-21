@@ -1,7 +1,7 @@
 """Hold-chord tracker: modifier stays down, the main key can go up and down again."""
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from saytray.chord import ChordTracker
+from saytray.chord import ChordTracker, ModifierArm
 
 passes = failures = 0
 
@@ -76,6 +76,15 @@ check(got == expect, f"20 rapid cycles stay paired: downs={got.count('down')} up
 # Key-repeat spam while the chord is held is still one session.
 got = drive("ctrl+alt+space", [("ctrl", True), ("alt", True)] + [("space", True)] * 20 + [("space", False)])
 check(got.count("down") == 1 and got.count("up") == 1, f"repeat spam is one session: {got.count('down')} down {got.count('up')} up")
+
+arm = ModifierArm("ctrl+alt+space")
+check(arm.event("ctrl", True) is False, "one modifier does not arm")
+check(arm.event("alt", True) is True, "both modifiers arm once")
+check(arm.event("alt", True) is False, "the arm does not repeat while they stay down")
+check(arm.event("space", True) is False, "the main key does not arm by itself")
+check(arm.event("alt", False) is False and arm.event("alt", True) is True, "releasing a modifier arms again on the next press")
+alone = ModifierArm("ctrl+alt+space")
+check(alone.event("space", True) is False, "space alone does not warm the mic")
 
 print(f"Chord tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)
