@@ -2,8 +2,8 @@
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
-from .config import pretty_voice
-from .voices import (by_id, delete_voice, downloads, format_size, is_installed,
+from .config import hotkey_ok, pretty_voice
+from .voices import (by_id, default_voice, delete_voice, downloads, format_size, is_installed,
                      normalize_speaker, voice_size, voices)
 from . import sapi, startup
 
@@ -48,6 +48,7 @@ def _run(settings, on_saved, test_speak):
         row("Dictate (hold)", recorder(dict_v))
 
         voice_v = tk.StringVar(value=settings["voice"])
+        user_picked = {"on": False}
         box = ttk.LabelFrame(f, text="Piper voices", padding=8)
         box.grid(row=r, column=0, columnspan=2, sticky="we", pady=6)
         r += 1
@@ -67,6 +68,7 @@ def _run(settings, on_saved, test_speak):
         speaker_v = tk.StringVar()
 
         def choose(vid):
+            user_picked["on"] = True
             voice_v.set(vid)
 
         def start_download(vid):
@@ -88,6 +90,10 @@ def _run(settings, on_saved, test_speak):
         def paint():
             if not root.winfo_exists():
                 return
+            if not user_picked["on"]:
+                saved_voice = settings["voice"]
+                if saved_voice and voice_v.get() != saved_voice:
+                    voice_v.set(saved_voice)
             for v in voices():
                 vid = v["id"]
                 st = downloads.status(vid)
@@ -125,9 +131,10 @@ def _run(settings, on_saved, test_speak):
                         box.bind("<<ComboboxSelected>>", lambda _e, vid=vid: choose(vid))
                     if mode != "selected":
                         ttk.Button(bf, text="Use", width=8, command=lambda vid=vid: choose(vid)).pack(side="left")
-                    ttk.Button(bf, text="Delete", width=8, command=lambda vid=vid: do_delete(vid)).pack(side="left", padx=2)
+                    if vid != default_voice():
+                        ttk.Button(bf, text="Delete", width=8, command=lambda vid=vid: do_delete(vid)).pack(side="left", padx=2)
                 elif mode == "downloading":
-                    ttk.Button(bf, text="Downloading", width=14, state="disabled").pack(side="left")
+                    ttk.Button(bf, text="Cancel", width=10, command=lambda vid=vid: downloads.cancel(vid)).pack(side="left")
                 else:
                     ttk.Button(bf, text="Download", width=10, command=lambda vid=vid: start_download(vid)).pack(side="left")
             root.after(400, paint)
@@ -160,8 +167,17 @@ def _run(settings, on_saved, test_speak):
             return normalize_speaker(voice_v.get(), settings.data.get("speaker")) or 0
 
         def save(close=True):
-            settings.set(read_hotkey=read_v.get().strip() or "alt+`", dictate_hotkey=dict_v.get().strip() or "ctrl+alt+space",
-                         voice=voice_v.get() or settings["voice"], speaker=speaker_id(), sapi_voice=sapi_v.get(),
+            read = read_v.get().strip()
+            dictate = dict_v.get().strip()
+            if not hotkey_ok(read):
+                messagebox.showerror("SayTray", "That read shortcut isn't one SayTray can register.")
+                return
+            if not hotkey_ok(dictate):
+                messagebox.showerror("SayTray", "That dictate shortcut isn't one SayTray can register.")
+                return
+            voice = voice_v.get() if user_picked["on"] else settings["voice"]
+            settings.set(read_hotkey=read, dictate_hotkey=dictate,
+                         voice=voice or settings["voice"], speaker=speaker_id(), sapi_voice=sapi_v.get(),
                          speed=round(float(speed_v.get()) * 10) / 10, start_with_windows=bool(start_v.get()), chime=bool(chime_v.get()))
             startup.set_enabled(bool(start_v.get()))
             on_saved()

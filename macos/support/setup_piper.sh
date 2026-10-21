@@ -11,8 +11,10 @@ ensure_piper_venv() {
   local python3="$2"
   local venv="$piper/venv"
   if [ -d "$venv" ]; then
-    if ! "$venv/bin/python" -c 'import sys' >/dev/null 2>&1 || ! "$venv/bin/pip" --version >/dev/null 2>&1; then
-      echo "Piper venv is broken (python or pip is not runnable). Recreating it…"
+    if ! "$venv/bin/python" -c 'import sys' >/dev/null 2>&1 \
+        || ! "$venv/bin/pip" --version >/dev/null 2>&1 \
+        || ! "$venv/bin/python" -c 'import piper, onnxruntime' >/dev/null 2>&1; then
+      echo "Piper venv is broken (python, pip, or Piper is not runnable). Recreating it…"
       rm -rf "$venv"
     fi
   fi
@@ -61,6 +63,10 @@ main() {
     echo "python3 not found. Install Python 3.10+ from https://www.python.org/downloads/ then re-run."
     exit 1
   fi
+  if ! "$PYTHON3" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+    echo "Python 3.10 or newer is required."
+    exit 1
+  fi
 
   mkdir -p "$VOICES"
   ensure_piper_venv "$PIPER" "$PYTHON3"
@@ -70,12 +76,25 @@ main() {
     echo "Installed saytray_piper.py"
   fi
 
+  sha_of() {
+    local path="$1"
+    if command -v shasum >/dev/null 2>&1; then
+      shasum -a 256 "$path" | awk '{print $1}'
+    else
+      sha256sum "$path" | awk '{print $1}'
+    fi
+  }
+
   download() {
-    local name="$1" url="$2" expect="${3:-0}"
+    local name="$1" url="$2" expect="${3:-0}" sha="${4:-}"
     local out="$VOICES/$name" got
     if [ -f "$out" ]; then
       got=$(wc -c < "$out" | tr -d '[:space:]')
+      local size_ok=0
       if { [ "$expect" -gt 0 ] && [ "$got" -eq "$expect" ]; } || { [ "$expect" -le 0 ] && [ "$got" -gt 0 ]; }; then
+        size_ok=1
+      fi
+      if [ "$size_ok" -eq 1 ] && { [ -z "$sha" ] || [ "$(sha_of "$out")" = "$sha" ]; }; then
         echo "  already have $name"
         return 0
       fi
@@ -95,6 +114,11 @@ main() {
       echo "  incomplete download: $name (empty)" >&2
       exit 1
     fi
+    if [ -n "$sha" ] && [ "$(sha_of "$out.partial")" != "$sha" ]; then
+      rm -f "$out.partial"
+      echo "  checksum mismatch: $name" >&2
+      exit 1
+    fi
     mv "$out.partial" "$out"
   }
 
@@ -110,20 +134,20 @@ for voice_id in cat.get("removed") or []:
     print(f"remove\t{voice_id}\t")
 for v in defaults:
     for f in v["files"]:
-        print(f"file\t{f['filename']}\t{f['url']}\t{int(f.get('sizeBytes') or 0)}")
+        print(f"file\t{f['filename']}\t{f['url']}\t{int(f.get('sizeBytes') or 0)}\t{f.get('sha256') or ''}")
 PY
 )"
 
   local TOTAL_MB
   TOTAL_MB="$(printf '%s\n' "$LIST" | awk -F'\t' '$1=="total" { printf "%d", ($2/1048576)+0.5 }')"
   echo "Downloading default voices (about ${TOTAL_MB} MB)…"
-  printf '%s\n' "$LIST" | while IFS="$(printf '\t')" read -r kind name url size; do
+  printf '%s\n' "$LIST" | while IFS="$(printf '\t')" read -r kind name url size sha; do
     case "$kind" in
       remove)
         rm -f "$VOICES/$name.onnx" "$VOICES/$name.onnx.json" "$VOICES/$name.onnx.partial"
         ;;
       file)
-        download "$name" "$url" "${size:-0}"
+        download "$name" "$url" "${size:-0}" "${sha:-}"
         ;;
     esac
   done

@@ -20,13 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     VoiceCatalog.removeRetired()
     speaker.warmUp()
     Chime.preload()
+    #if DEBUG
     // Debug/test trigger: post distributed notification "com.jonbecherer.saytray.debugSpeak" with the text as object.
+    // Release builds do not define DEBUG, so these observers are not in the app users install.
     DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.jonbecherer.saytray.debugSpeak"), object: nil, queue: .main) { [weak self] n in
       if let t = n.object as? String, !t.isEmpty { self?.speaker.speak(t) }
     }
     DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.jonbecherer.saytray.debugDictate"), object: nil, queue: .main) { [weak self] n in
       if (n.object as? String) == "start" { self?.dictation.start() } else { self?.dictation.stop() }
     }
+    #endif
     if !Permissions.accessibility { Permissions.promptAccessibility() }
     if Permissions.mic == .notDetermined || Permissions.speech == .notDetermined {
       Permissions.requestMicAndSpeech { [weak self] in self?.dictation.warmMicrophone() }

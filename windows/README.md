@@ -8,7 +8,7 @@ Free, offline system-tray text-to-speech and push-to-talk dictation.
 
 Works fully offline after install downloads voices and Python packages. No account, no cloud.
 
-**Version:** see `VERSION` (currently 1.0.0) · **Requires:** Windows 10/11, Python 3.10+
+**Version:** see `VERSION` (currently 1.1.0) · **Requires:** Windows 10/11, Python 3.10+
 
 ---
 

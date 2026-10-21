@@ -38,9 +38,7 @@ final class Speaker {
     let dir = Log.lastRead
     let fm = FileManager.default
     try? fm.removeItem(at: dir); try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-    let scalars = text.unicodeScalars.map { $0.value >= 32 && $0.value < 127 ? String($0) : String(format: "<U+%04X>", $0.value) }.joined()
-    let dump = "READ \(readID) ENGINE \(st.engine) VOICE \(st.piperVoice) SPEED \(st.speed)\n--- RAW ---\n\(text)\n--- SCALARS ---\n\(scalars)\n--- CHUNKS ---\n"
-      + chunks.enumerated().map { String(format: "%03d", $0.offset + 1) + ": " + $0.element }.joined(separator: "\n") + "\n"
+    let dump = "READ \(readID) ENGINE \(st.engine) VOICE \(st.piperVoice) SPEED \(st.speed) CHARS \(text.count) CHUNKS \(chunks.count)\n"
     try? dump.write(to: dir.appendingPathComponent("input.txt"), atomically: true, encoding: .utf8)
     player.speed = st.speed
     player.systemVoiceID = st.voiceID

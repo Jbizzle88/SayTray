@@ -51,6 +51,17 @@ check(jenny["files"][0]["url"] == "https://sfo3.digitaloceanspaces.com/bkmdls/je
 check(jenny["files"][1]["url"] == "https://sfo3.digitaloceanspaces.com/bkmdls/jenny.onnx.json", "Jenny json URL")
 check("libritts_r" not in json.dumps(libri), "LibriTTS is not LibriTTS-R")
 check(all(f["url"].startswith("https://") and f["sizeBytes"] > 0 and f["filename"] for v in voices.voices() for f in v["files"]), "urls and sizes")
+import re
+for v in voices.voices():
+    for f in v["files"]:
+        check("resolve/main/" not in f["url"], f"{f['filename']} is not a floating main URL")
+        check(re.fullmatch(r"[0-9a-f]{64}", f.get("sha256") or "") is not None, f"{f['filename']} has a sha256")
+pinned = "5041a7a49ae5b3a0f30e6837769eb03fdbb231bd"
+for v in voices.voices():
+    if v["id"] == "jenny-dioco":
+        continue
+    for f in v["files"]:
+        check(pinned in f["url"], f"{f['filename']} is pinned to {pinned[:8]}")
 
 # 63,531,379 + 4,968 and 114,199,011 + 4,970 = 177,740,328 bytes = 170 MiB.
 default_bytes = sum(voices.voice_size(v) for v in voices.voices() if v["installByDefault"])
@@ -103,8 +114,15 @@ with tempfile.TemporaryDirectory() as d:
     check(len(gone) == 8, f"removed {len(gone)} retired files")
     check(not any(os.path.exists(os.path.join(d, b + ".onnx")) for b in banned), "retired onnx gone")
     check(voices.installed_ids(d) == ["en_US-norman-medium"], f"installed after cleanup: {voices.installed_ids(d)}")
-    voices.delete_voice("en_US-norman-medium", d)
-    check(voices.installed_ids(d) == [], "delete removes Norman")
+    refused = False
+    try:
+        voices.delete_voice("en_US-norman-medium", d)
+    except ValueError:
+        refused = True
+    check(refused, "Norman cannot be deleted")
+    check(voices.installed_ids(d) == ["en_US-norman-medium"], "Norman files stay after a delete attempt")
+    voices.delete_voice("en_US-ljspeech-high", d)
+    check(not os.path.exists(short), "a non-default voice can be deleted")
 
 def head(url):
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "SayTray"})
@@ -145,7 +163,24 @@ def _check_downloader():
         with tempfile.TemporaryDirectory() as d:
             dest = os.path.join(d, "sample.onnx")
             voices.downloads._download(f"http://127.0.0.1:{server.server_address[1]}/sample.onnx", dest, 0, len(payload), len(payload), "sample")
+            import hashlib
+            good = hashlib.sha256(payload).hexdigest()
+            voices.downloads._download(
+                f"http://127.0.0.1:{server.server_address[1]}/sample.onnx",
+                dest, 0, len(payload), len(payload), "sample", sha=good)
             check(open(dest, "rb").read() == payload, "downloader writes the response")
+            mismatch = os.path.join(d, "mismatch.onnx")
+            bad_hash = False
+            bad_msg = ""
+            try:
+                voices.downloads._download(
+                    f"http://127.0.0.1:{server.server_address[1]}/sample.onnx",
+                    mismatch, 0, len(payload), len(payload), "mismatch", sha="0" * 64)
+            except Exception as e:
+                bad_hash = True
+                bad_msg = str(e)
+            check(bad_hash and "checksum" in bad_msg, f"checksum mismatch rejected: {bad_msg}")
+            check(not os.path.exists(mismatch) and not os.path.exists(mismatch + ".partial"), "bad checksum leaves no file")
             short = os.path.join(d, "short.onnx")
             rejected = False
             message = ""

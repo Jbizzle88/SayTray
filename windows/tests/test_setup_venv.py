@@ -33,6 +33,12 @@ check("incomplete download" in setup, "setup_piper.sh rejects a short download")
 check("sizeBytes" in setup, "setup_piper.sh passes the catalog size")
 check("incomplete download" in install, "install.ps1 rejects a short download")
 check("$expect" in install and "sizeBytes" in install, "install.ps1 compares file length to sizeBytes")
+check("sha256" in setup and "checksum mismatch" in setup, "setup_piper.sh checks sha256")
+check("import piper, onnxruntime" in setup, "setup_piper.sh recreates a venv that cannot import Piper")
+check("import piper, onnxruntime" in install, "install.ps1 recreates a venv that cannot import Piper")
+check("Get-FileHash" in install and "checksum mismatch" in install, "install.ps1 checks sha256")
+check("WhisperModel" in install, "install.ps1 prefetches the dictation model")
+check("3.10" in setup and "3.10" in install, "installers require Python 3.10+")
 
 def write(path, body):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -111,6 +117,45 @@ def broken_case(kind):
 
 broken_case("pip")
 broken_case("python")
+
+def broken_import():
+    with tempfile.TemporaryDirectory() as tmp:
+        piper = os.path.join(tmp, "Application Support", "SayTray", "piper")
+        venv = os.path.join(piper, "venv")
+        marker = os.path.join(tmp, "recreated")
+        write(os.path.join(venv, "bin", "python"), textwrap.dedent("""\
+            #!/bin/bash
+            case "$*" in
+              *piper*) exit 1 ;;
+            esac
+            exit 0
+        """))
+        write(os.path.join(venv, "bin", "pip"), "#!/bin/bash\nexit 0\n")
+        py3 = os.path.join(tmp, "python3")
+        write(py3, textwrap.dedent(f"""\
+            #!/bin/bash
+            dest=""
+            for a in "$@"; do dest="$a"; done
+            if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
+              mkdir -p "$dest/bin"
+              cat > "$dest/bin/python" << 'PY'
+            #!/bin/bash
+            exit 0
+            PY
+              cp "$dest/bin/python" "$dest/bin/pip"
+              chmod +x "$dest/bin/python" "$dest/bin/pip"
+              echo ok > "{marker}"
+              exit 0
+            fi
+            echo "unexpected python3 $*" >&2
+            exit 1
+        """))
+        r = ensure(piper, py3)
+        check(r.returncode == 0, f"import-broken venv exits 0 ({r.returncode}) stderr={r.stderr!r}")
+        check("Recreating" in r.stdout, f"import-broken venv recreates: {r.stdout!r} {r.stderr!r}")
+        check(os.path.exists(marker), "import-broken venv called python -m venv")
+
+broken_import()
 
 print(f"Venv setup tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)

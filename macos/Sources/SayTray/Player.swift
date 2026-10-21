@@ -40,7 +40,7 @@ final class Player: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate
       current = p
       p.prepareToPlay(); p.play()
     case .system(let text):
-      log("PLAY system: \(text)")
+      log("PLAY system: \(text.count) chars")
       let u = AVSpeechUtterance(string: text)
       if let v = AVSpeechSynthesisVoice(identifier: systemVoiceID) ?? AVSpeechSynthesisVoice(language: "en-US") { u.voice = v }
       let base = Double(AVSpeechUtteranceDefaultSpeechRate), maxR = Double(AVSpeechUtteranceMaximumSpeechRate)

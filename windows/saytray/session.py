@@ -76,7 +76,7 @@ class ReadSession:
 
     def _trigger(self, s, msg):
         s.events.append(msg)
-        logs.guard(f"read {self.id} chunk {s.key}: {msg} | {s.text}")
+        logs.guard(f"read {self.id} chunk {s.key}: {msg} ({len(s.text)} chars)")
         logs.append(f"GUARD chunk {s.key}: {msg}", os.path.join(self.dir, "play.log"))
 
     def _resolve(self, s, items):

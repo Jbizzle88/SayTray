@@ -1,5 +1,5 @@
 """Persisted settings (%LOCALAPPDATA%\\SayTray\\settings.json)."""
-import json, os, threading
+import json, os, threading, datetime
 from .logs import ROOT
 from .voices import installed_ids, pretty_voice, resolve_saved_voice
 
@@ -15,7 +15,15 @@ DEFAULTS = {
 }
 PATH = os.path.join(ROOT, "settings.json")
 
-_MODS = {"ctrl", "control", "alt", "shift", "win", "windows", "cmd", "command", "option", "meta"}
+_MODS = {
+    "ctrl", "control", "alt", "shift", "win", "windows", "cmd", "command", "option", "meta",
+    "alt gr", "altgr", "left windows", "right windows",
+}
+_KEYS_WITH_SPACE = {
+    "page up", "page down", "num lock", "scroll lock", "print screen", "caps lock",
+    "left windows", "right windows", "left ctrl", "right ctrl", "left alt", "right alt",
+    "left shift", "right shift", "alt gr",
+}
 
 
 def clamp_speed(value, default=1.0):
@@ -51,22 +59,39 @@ def coerce_bool(value, default):
     return default
 
 
-def coerce_hotkey(value, default):
+def hotkey_ok(value):
+    """True when `value` is a shortcut SayTray can register."""
     if not isinstance(value, str):
-        return default
+        return False
     raw = value.strip()
+    if not raw or raw.lower() in ("press keys…", "press keys..."):
+        return False
+    try:
+        import keyboard
+        keyboard.parse_hotkey(raw)
+        return True
+    except ImportError:
+        pass
+    except Exception:
+        return False
     parts = [p.strip() for p in raw.split("+")]
-    if not parts or any(not p for p in parts) or len(parts) > 4:
-        return default
-    if any(any(ch.isspace() for ch in p) for p in parts):
-        return default
+    if not parts or any(not p for p in parts) or len(parts) > 5:
+        return False
     key = parts[-1]
-    if len(key) > 24 or any(ord(c) < 32 or ord(c) > 126 for c in key):
-        return default
+    if any(ord(c) < 32 for c in key) or len(key) > 32:
+        return False
+    if any(ch.isspace() for ch in key) and key.lower() not in _KEYS_WITH_SPACE:
+        return False
     for mod in parts[:-1]:
         if mod.lower() not in _MODS:
-            return default
-    return raw
+            return False
+    return True
+
+
+def coerce_hotkey(value, default):
+    if hotkey_ok(value):
+        return value.strip()
+    return default
 
 
 def coerce_speaker(value, default=0):
@@ -74,15 +99,18 @@ def coerce_speaker(value, default=0):
         n = int(value)
     except (TypeError, ValueError):
         return default
-    if n < 0 or n > 64:
+    if n < 0:
         return default
     return n
 
 
 def sanitize(data):
-    """Keep only known settings, with speed, hotkeys, and chime in range."""
+    """Fix known fields. Unknown keys are kept so a newer build's settings survive."""
     src = data if isinstance(data, dict) else {}
     out = dict(DEFAULTS)
+    for key, value in src.items():
+        if key not in DEFAULTS:
+            out[key] = value
     out["speed"] = clamp_speed(src.get("speed", DEFAULTS["speed"]))
     voice = src.get("voice", DEFAULTS["voice"])
     out["voice"] = voice.strip() if isinstance(voice, str) and voice.strip() else DEFAULTS["voice"]
@@ -96,6 +124,27 @@ def sanitize(data):
     return out
 
 
+def write_atomic(path, data):
+    """Replace `path` only after the new file is fully written."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def backup_unreadable(path):
+    """Move a settings file that did not parse aside. Returns the backup path."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    dest = path + ".bad"
+    if os.path.exists(dest):
+        dest = path + ".bad." + stamp
+    os.replace(path, dest)
+    return dest
+
+
 def installed_voices():
     return installed_ids()
 
@@ -103,20 +152,37 @@ def installed_voices():
 class Settings:
     def __init__(self):
         self._lock = threading.Lock()
-        raw = {}
+        raw = None
+        parsed = False
         try:
             with open(PATH, encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
                 raw = loaded
+                parsed = True
+            else:
+                parsed = False
+        except FileNotFoundError:
+            raw = {}
+            parsed = True
         except Exception:
-            pass
-        self.data = sanitize(raw)
+            raw = None
+            parsed = False
+        if not parsed:
+            try:
+                backup_unreadable(PATH)
+            except Exception:
+                pass
+            raw = {}
+        self.data = sanitize(raw or {})
         voice = resolve_saved_voice(self.data.get("voice") or "")
         if voice != self.data.get("voice"):
             self.data["voice"] = voice
         self.listeners = []
-        dirty = any(self.data.get(k) != raw.get(k) for k in DEFAULTS) or any(k not in DEFAULTS for k in raw)
+        if parsed:
+            dirty = any(self.data.get(k) != (raw or {}).get(k) for k in self.data)
+        else:
+            dirty = True
         if dirty:
             try:
                 self._write()
@@ -127,9 +193,7 @@ class Settings:
         return self.data[k]
 
     def _write(self):
-        os.makedirs(ROOT, exist_ok=True)
-        with open(PATH, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2)
+        write_atomic(PATH, self.data)
 
     def set(self, **kw):
         with self._lock:

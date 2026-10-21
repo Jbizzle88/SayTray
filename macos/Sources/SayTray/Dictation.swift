@@ -10,13 +10,15 @@ import SBObjC
 /// and the texts are concatenated. A result that does not cover its slice is halved and
 /// recognized again, so a long hold comes out from the start through the end.
 final class Dictation {
-  private enum Phase: String { case idle, arming, recording }
+  private enum Phase: String { case idle, arming, recording, grace }
   private struct Clip { var buffer: AVAudioPCMBuffer; var seconds: Double }
   private struct Job { var gen: Int; var buffers: [AVAudioPCMBuffer]; var seconds: Double }
 
   private let preRollLimit = 0.45
   private let segmentLimit = DictationPlan.segmentLimit
   private let minLive = 0.15
+  private let graceSeconds = 0.25
+  private let idleMicSeconds = 20.0
 
   private var engine: AVAudioEngine?
   private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) ?? SFSpeechRecognizer()
@@ -31,7 +33,9 @@ final class Dictation {
   private var firstLiveAt: Date?
   private var phase: Phase = .idle
   private var generation = 0
+  private var graceGen = 0
   private var shuttingDown = false
+  private var idleWork: DispatchWorkItem?
   private var jobs: [Job] = []
   private var pumping = false
   private var loggedCopyFail = false
@@ -81,8 +85,18 @@ final class Dictation {
       Log.event("dictation: start ignored, shutting down")
       return
     }
+    if phase == .grace { endGrace(graceGen, scheduleIdle: false) }
     if phase == .recording || phase == .arming {
       Log.event("dictation: start ignored, already \(phase.rawValue)")
+      return
+    }
+    idleWork?.cancel()
+    idleWork = nil
+    if Permissions.speech != .authorized {
+      Log.event("dictation: speech recognition not authorized")
+      NSSound.beep()
+      if Permissions.speech == .notDetermined { Permissions.requestMicAndSpeech(nil) }
+      scheduleMicIdle()
       return
     }
     pressedAt = Date()
@@ -102,40 +116,80 @@ final class Dictation {
   func stop() {
     if !Thread.isMainThread { DispatchQueue.main.async { self.stop() }; return }
     switch phase {
-    case .idle:
+    case .idle, .grace:
       return
     case .arming:
       generation += 1
       phase = .idle
       setRecordingUI(false)
       Log.event("dictation: cancelled before capture")
+      scheduleMicIdle()
     case .recording:
-      let gen = generation
-      audioLock.lock()
-      capturing = false
-      let buffers = session
-      session = []
-      let pre = preRollAtStart
-      let liveAt = firstLiveAt
-      ring.removeAll()
-      ringSeconds = 0
-      audioLock.unlock()
-      phase = .idle
+      graceGen = generation
+      phase = .grace
       setRecordingUI(false)
       playChime("stop")
-      let total = audioSeconds(buffers)
-      let live = max(0, total - pre)
-      let latencyMs: Double
-      if let pressedAt, let liveAt { latencyMs = liveAt.timeIntervalSince(pressedAt) * 1000 } else { latencyMs = -1 }
-      Log.event("dictation: stopped gen \(gen) audio \(sec(total))s buffers \(buffers.count) (no duration cap) pre-roll \(Int((pre * 1000).rounded()))ms live \(sec(live))s first-buffer \(Int(latencyMs.rounded()))ms")
-      if live < minLive {
-        Log.event("dictation: too short, ignored")
-        return
+      let gen = graceGen
+      DispatchQueue.main.asyncAfter(deadline: .now() + graceSeconds) { [weak self] in
+        self?.endGrace(gen)
       }
+    }
+  }
+
+  /// Keep a short tail after key-up, then clear the ring so it is not the next pre-roll.
+  private func endGrace(_ gen: Int, scheduleIdle: Bool = true) {
+    guard phase == .grace, gen == graceGen else { return }
+    audioLock.lock()
+    capturing = false
+    let buffers = session
+    session = []
+    let pre = preRollAtStart
+    let liveAt = firstLiveAt
+    ring.removeAll()
+    ringSeconds = 0
+    audioLock.unlock()
+    phase = .idle
+    let total = audioSeconds(buffers)
+    let live = max(0, total - pre)
+    let latencyMs: Double
+    if let pressedAt, let liveAt { latencyMs = liveAt.timeIntervalSince(pressedAt) * 1000 } else { latencyMs = -1 }
+    Log.event("dictation: stopped gen \(gen) audio \(sec(total))s buffers \(buffers.count) (no duration cap) pre-roll \(Int((pre * 1000).rounded()))ms live \(sec(live))s first-buffer \(Int(latencyMs.rounded()))ms")
+    if live < minLive {
+      Log.event("dictation: too short, ignored")
+    } else {
       jobs.append(Job(gen: gen, buffers: buffers, seconds: total))
       Log.event("dictation: queued gen \(gen) (\(jobs.count) in line)")
       pump()
     }
+    if scheduleIdle { scheduleMicIdle() }
+  }
+
+  private func scheduleMicIdle() {
+    idleWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in self?.releaseMicrophoneIfIdle() }
+    idleWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + idleMicSeconds, execute: work)
+  }
+
+  private func releaseMicrophoneIfIdle() {
+    guard phase == .idle, !shuttingDown, !capturing else { return }
+    guard engine != nil else { return }
+    if let eng = engine {
+      _ = SBTryObjC {
+        eng.inputNode.removeTap(onBus: 0)
+        if eng.isRunning { eng.stop() }
+      }
+    }
+    engine = nil
+    if let o = configObs {
+      NotificationCenter.default.removeObserver(o)
+      configObs = nil
+    }
+    audioLock.lock()
+    ring.removeAll()
+    ringSeconds = 0
+    audioLock.unlock()
+    Log.event("dictation: microphone released after idle")
   }
 
   /// Stop the microphone and drop any clip still being recognized. Does not type.
@@ -253,6 +307,12 @@ final class Dictation {
 
   private func pump() {
     guard !shuttingDown else { pumping = false; jobs.removeAll(); return }
+    guard Permissions.speech == .authorized else {
+      pumping = false
+      jobs.removeAll()
+      Log.event("dictation: speech recognition not authorized; queued clips dropped")
+      return
+    }
     guard !pumping, !jobs.isEmpty else { return }
     pumping = true
     let job = jobs.removeFirst()
@@ -309,6 +369,11 @@ final class Dictation {
 
   /// One request, then halve and try both halves when the transcript skips the front or the tail.
   private func recognizeAdaptive(_ buffers: [AVAudioPCMBuffer], depth: Int, done: @escaping (String) -> Void) {
+    guard Permissions.speech == .authorized else {
+      Log.event("dictation: speech recognition not authorized")
+      done("")
+      return
+    }
     let audio = audioSeconds(buffers)
     recognizeOnce(buffers) { [weak self] text, first, last, failed in
       guard let self else { done(text); return }
@@ -357,11 +422,12 @@ final class Dictation {
         DispatchQueue.main.async {
           if let r = result {
             let next = r.bestTranscription.formattedString
-            let merged = DictationSpacing.merge(text, next)
-            if !text.isEmpty, merged != next, !next.hasPrefix(text), !text.hasPrefix(next) {
-              Log.event("dictation: partial replaced earlier text (\(text.count) chars); concatenating")
+            // A partial is the recognizer's current guess for this whole slice. Keeping
+            // every revision and gluing them together repeats the sentence.
+            if !text.isEmpty, next != text {
+              Log.event("dictation: partial revised (\(text.count) chars -> \(next.count))")
             }
-            text = merged
+            text = next
             let segs = r.bestTranscription.segments
             if let s = segs.first { firstWord = s.timestamp }
             if let s = segs.last { lastWord = s.timestamp + s.duration }
@@ -380,7 +446,12 @@ final class Dictation {
       done("", nil, nil, true)
       return
     }
-    for b in buffers { req.append(b) }
+    for b in buffers {
+      if let err = SBTryObjC({ req.append(b) }) {
+        Log.event("dictation: append failed: \(err)")
+        break
+      }
+    }
     req.endAudio()
     // A 30 s slice can take longer than the audio to come back on device. Cancelling
     // early is what used to leave only the latest partial.

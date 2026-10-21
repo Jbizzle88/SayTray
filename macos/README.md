@@ -8,7 +8,7 @@ Free, offline menu-bar text-to-speech and push-to-talk dictation for macOS.
 
 Works fully offline after the one-time Piper voice download. No account, no cloud.
 
-**Version:** see `VERSION` (currently 1.0.0) · **Requires:** macOS 14+
+**Version:** see `VERSION` (currently 1.1.0) · **Requires:** macOS 14+
 
 ---
 

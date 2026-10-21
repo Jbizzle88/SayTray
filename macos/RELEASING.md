@@ -29,8 +29,8 @@ Contents: `SayTray.app`, Setup Piper Voices, Uninstall, README. Voices are **not
 Suggested host: **GitHub Releases** on a public repo.
 
 1. Create a GitHub repo (e.g. `SayTray`) and push this tree (or only `dist/` + README).
-2. Tag `v1.0.0` and create a Release.
-3. Attach `dist/SayTray-1.0.0-macOS.zip` (and the Windows zip when ready).
+2. Tag the version (for example `v1.1.0`) and create a Release.
+3. Attach `dist/SayTray-<VERSION>-macOS.zip` and the matching Windows zip. Do not republish the 1.0.0 packages; those install voices this build removed.
 4. Paste the Release URL wherever you want people to download.
 
 No Apple Developer Program / notarization in v1 — document the **right-click → Open** Gatekeeper step in the Release notes (already in README).

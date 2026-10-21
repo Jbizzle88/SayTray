@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $Src = $PSScriptRoot
 $R = Join-Path $env:LOCALAPPDATA "SayTray"
 $Version = (Get-Content (Join-Path $Src "VERSION") -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
-if (-not $Version) { $Version = "1.0.0" }
+if (-not $Version) { $Version = "1.1.0" }
 
 # Migrate from SpeakBar (old name) if present
 $OldR = Join-Path $env:LOCALAPPDATA "SpeakBar"
@@ -52,16 +52,24 @@ function Test-VenvHealthy([string]$Root) {
       if ($LASTEXITCODE -ne 0) { return $false }
     }
     & $python -m pip --version 1>$null 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    & $python -c "import piper, onnxruntime" 1>$null 2>$null
     return $LASTEXITCODE -eq 0
   } catch {
     return $false
   }
 }
 
+function Test-FileSha([string]$Path, [string]$Expect) {
+  if ([string]::IsNullOrWhiteSpace($Expect)) { return $true }
+  $got = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash
+  return $got.ToLower() -eq $Expect.ToLower()
+}
+
 $py = (Get-Command py -ErrorAction SilentlyContinue)
 $venv = Join-Path $R "venv"
 if ((Test-Path $venv) -and -not (Test-VenvHealthy $venv)) {
-  Write-Host "Piper venv is broken (python or pip is not runnable). Recreating it…"
+  Write-Host "Piper venv is broken (python, pip, or Piper is not runnable). Recreating it…"
   Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like "*SayTray*" -or $_.CommandLine -like "*SpeakBar*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -73,11 +81,18 @@ if (!(Test-Path "$venv\Scripts\python.exe")) {
   if ($py) { & py -3 -m venv $venv } else { & python -m venv $venv }
   if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
 }
+& "$venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) { throw "Python 3.10 or newer is required." }
 if (!$SkipDeps) {
   Write-Host "Installing Python packages (piper-tts, faster-whisper, …)…"
   & "$venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q --upgrade pip
   & "$venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r "$Src\requirements.txt"
   if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+  Write-Host "Downloading the dictation model (first time only)…"
+  & "$venv\Scripts\python.exe" -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "The dictation model did not download. SayTray will try again when you dictate."
+  }
 }
 
 # 2. Default Piper voices from saytray\voices.json (Norman + LJSpeech). Optional voices download in the app.
@@ -103,9 +118,14 @@ if (!$SkipVoices) {
     foreach ($file in @($v.files)) {
       $o = Join-Path "$R\voices" $file.filename
       $expect = [int64]$file.sizeBytes
+      $hash = [string]$file.sha256
       $got = -1
       if (Test-Path $o) { $got = (Get-Item $o).Length }
       $ok = ($expect -gt 0 -and $got -eq $expect) -or ($expect -le 0 -and $got -gt 0)
+      if ($ok -and $hash -and -not (Test-FileSha $o $hash)) {
+        Write-Host "  checksum mismatch $($file.filename); downloading again"
+        $ok = $false
+      }
       if (-not $ok) {
         if ($got -ge 0) {
           Write-Host "  replacing incomplete $($file.filename) ($got of $expect bytes)"
@@ -123,6 +143,10 @@ if (!$SkipVoices) {
         if (($expect -gt 0 -and $final -ne $expect) -or $final -le 0) {
           Remove-Item $o -Force -ErrorAction SilentlyContinue
           throw "incomplete download: $($file.filename) ($final of $expect bytes)"
+        }
+        if ($hash -and -not (Test-FileSha $o $hash)) {
+          Remove-Item $o -Force -ErrorAction SilentlyContinue
+          throw "checksum mismatch: $($file.filename)"
         }
       }
     }
