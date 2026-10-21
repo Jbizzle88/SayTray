@@ -48,56 +48,18 @@ def apply(text, previous):
     return " " + text
 
 
-def _words(text):
-    return [w for w in (text or "").split() if w]
-
-
-def _same_word(a, b):
-    def norm(w):
-        return "".join(ch for ch in w.casefold() if ch.isalnum())
-    na, nb = norm(a), norm(b)
-    return bool(na) and na == nb
-
-
 def dedupe_boundary(left, right, max_words=8):
-    """Drop a short repeated prefix of `right` that copies the end of `left`.
+    """Return `right` unchanged.
 
-    Used only where two slices share audio. A long shared sentence is left alone.
-    "I" and "It" do not match.
+    Matching words across a slice boundary dropped real speech, including the
+    word after a silent slice. Slices are joined with spacing only.
     """
-    lw, rw = _words(left), _words(right)
-    if not lw or not rw:
-        return right or ""
-    cap = max(1, int(max_words or 1))
-    best = 0
-    limit = min(cap, len(lw), len(rw))
-    for n in range(1, limit + 1):
-        if all(_same_word(lw[-n + i], rw[i]) for i in range(n)):
-            best = n
-    if best <= 0:
-        return right or ""
-    kept = rw[best:]
-    if not kept:
-        return ""
-    # Preserve the original spacing of the surviving tail.
-    tail = right
-    for word in rw[:best]:
-        idx = tail.find(word)
-        if idx < 0:
-            break
-        tail = tail[idx + len(word):]
-    return tail.lstrip()
+    return right or ""
 
 
 def join_overlapped(parts, max_words=8):
-    """Join slices that shared a second of audio, dropping the repeated boundary words."""
-    out = ""
-    for part in parts:
-        piece = part or ""
-        if out:
-            piece = dedupe_boundary(out, piece, max_words)
-        out = merge(out, piece)
-    return out
+    """Same as join_segments. The old overlap dedupe is inert."""
+    return join_segments(parts)
 
 
 def merge(previous, incoming):

@@ -96,6 +96,9 @@ main() {
       fi
       if [ "$size_ok" -eq 1 ] && { [ -z "$sha" ] || [ "$(sha_of "$out")" = "$sha" ]; }; then
         echo "  already have $name"
+        if [ -n "$sha" ]; then
+          printf '%s\n' "$sha" > "$out.sha256"
+        fi
         return 0
       fi
       echo "  replacing incomplete $name ($got of $expect bytes)"
@@ -120,6 +123,9 @@ main() {
       exit 1
     fi
     mv "$out.partial" "$out"
+    if [ -n "$sha" ]; then
+      printf '%s\n' "$sha" > "$out.sha256"
+    fi
   }
 
   # Catalog fields are tab-separated: kind, name, url-or-bytes.

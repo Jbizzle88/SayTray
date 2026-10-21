@@ -110,7 +110,7 @@ final class HotKeyCenter {
   private func scheduleArm(_ id: UInt32) {
     armWork?.cancel()
     pendingArm = id
-    let work = DispatchWorkItem { [weak self] in self?.fireArm(id) }
+    let work = DispatchWorkItem { [weak self] in self?.fireArm(id, fromTimer: true) }
     armWork = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
   }
@@ -125,14 +125,25 @@ final class HotKeyCenter {
     guard let id = pendingArm else { return }
     armWork?.cancel()
     armWork = nil
-    fireArm(id)
+    fireArm(id, fromTimer: false)
   }
 
-  private func fireArm(_ id: UInt32) {
+  private func fireArm(_ id: UInt32, fromTimer: Bool) {
     guard pendingArm == id, let s = specs[id], s.hold, s.key.carbonMods != 0 else { return }
+    // A long hold of the read shortcut's modifiers is the user about to read.
+    // Leave the arm pending so the dictate key can still open the mic once.
+    if fromTimer && readModifiersHeld() { return }
     pendingArm = nil
     guard modifiersMatch(s.key, NSEvent.modifierFlags) else { return }
     s.arm()
+  }
+
+  private func readModifiersHeld() -> Bool {
+    let flags = NSEvent.modifierFlags
+    for (_, spec) in specs where !spec.hold && spec.key.carbonMods != 0 {
+      if modifiersMatch(spec.key, flags) { return true }
+    }
+    return false
   }
 
   private func noteDown(_ id: UInt32) {

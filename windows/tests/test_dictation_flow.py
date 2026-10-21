@@ -4,7 +4,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from saytray.spacing import apply, dedupe_boundary, join_overlapped, merge, join_segments, prepare, simulate_inserts
 from saytray.preroll import Ring, overlapped_pieces, split_pcm
-from saytray.segments import SEGMENT_S, needs_resplit, stitch_audio
+from saytray.segments import SEGMENT_S, OVERLAP_S, needs_resplit, stitch_audio
 from saytray.player import queue_chime
 
 passes = failures = 0
@@ -38,9 +38,11 @@ check(merge("price is", "$40") == "price is $40", "dollar amount in a sentence")
 check(apply("$5", "o") == " $5", "dollar amount is spaced")
 check(apply("¿Qué?", "o") == " ¿Qué?", "opening inverted question mark is spaced")
 check(apply("¡Hola!", "o") == " ¡Hola!", "opening inverted exclamation mark is spaced")
+check(apply("§1", "o") == " §1", "section sign is spaced")
 check(dedupe_boundary("I", "It is raining.") == "It is raining.", "I and It stay separate")
-check(dedupe_boundary("the quick brown fox", "brown fox jumps") == "jumps", "overlap drops the repeated words")
-check(join_overlapped(["the quick brown fox", "brown fox jumps"]) == "the quick brown fox jumps", "overlapped slices join once")
+check(dedupe_boundary("the quick brown fox", "brown fox jumps") == "brown fox jumps", "dedupe does not drop words")
+check(join_overlapped(["the quick brown fox", "brown fox jumps"]) == "the quick brown fox brown fox jumps", "boundary words are kept")
+check(join_overlapped(["the answer is no", "", "No, wait"]) == "the answer is no No, wait", "an empty slice does not drop the next words")
 check(join_segments(["I", "It is raining."]) == "I It is raining.", "plain join does not dedupe")
 check(apply("” end", "o") == "” end", "closing quote stays attached")
 check(apply("", "o") == "", "empty text")
@@ -176,46 +178,20 @@ check(len(pieces) == 10, f"5 min is 10 slices of 30s, got {len(pieces)}")
 check(sum(len(p) for p in pieces) == len(full), "5 min split drops nothing")
 check(pieces[0][0] == 0 and pieces[-1][-1] == full[-1], "5 min keeps the first and last sample")
 
-# A word on a  slice boundary is in both transcripts, then the repeated words are dropped once.
-sr_ov = 100
-words = np.concatenate([np.full(sr_ov // 2, i, np.float32) for i in range(8)])
-wide = overlapped_pieces(words, sr_ov, 2.0, 1.0)
-check(len(wide) > 1, "a clip past the limit becomes more than one slice")
-covered_flags = np.zeros(words.size, dtype=bool)
-for piece in wide:
-    # Each overlapped piece is a contiguous view of the original values.
-    start = int(piece[0]) * (sr_ov // 2)
-    # Values repeat inside a word, so locate the piece by matching the run.
-    pass
-union = np.zeros(words.size, dtype=bool)
-pos_search = 0
-for piece in wide:
-    # Find this piece inside the original. Overlap means it may start before pos_search.
-    found = None
-    for guess in range(0, words.size - piece.size + 1):
-        if np.array_equal(words[guess:guess + piece.size], piece):
-            found = guess
-            break
-    check(found is not None, "overlapped slice is a real span of the recording")
-    if found is not None:
-        union[found:found + piece.size] = True
-        if found < pos_search:
-            pos_search = found
-check(bool(union.all()), "overlap does not drop samples")
-check(max(len(p) for p in wide) <= int(sr_ov * 2.0) + int(sr_ov * 1.0) * 2, "overlap stays a small extension of the limit")
-
-def edge_drop(samples):
-    drop = int(0.6 * sr_ov)
-    core = samples[drop:-drop] if len(samples) > drop * 2 else samples
-    ids = []
-    for value in core:
-        iv = int(value)
-        if not ids or ids[-1] != iv:
-            ids.append(iv)
-    return " ".join(f"w{i}" for i in ids), 0.1, max(0.2, len(samples) / sr_ov - 0.1), False
-
-heard = stitch_audio(words, sr_ov, 2.0, edge_drop)
-check(heard == "w1 w2 w3 w4 w5 w6", f"boundary words survive the overlap: {heard}")
+check(OVERLAP_S == 0.0, "slice overlap is off")
+clip = np.arange(250, dtype=np.float32)
+same = overlapped_pieces(clip, 10, 2.0, 0.0)
+plain = split_pcm(clip, 10, 2.0)
+check(len(same) == len(plain) and all(np.array_equal(a, b) for a, b in zip(same, plain)), "zero overlap matches a plain cut")
+check(sum(len(p) for p in plain) == 250, "a plain cut does not repeat samples")
+heard = stitch_audio(
+    np.arange(250, dtype=np.float32),
+    10,
+    2.0,
+    lambda samples: (f"s{int(samples[0])}", 0.1, len(samples) / 10 - 0.1, False),
+)
+check("s0" in heard.split() and heard.split()[0] == "s0", f"stitched text keeps the start: {heard}")
+check(join_overlapped(["left side", "left side again"]) == "left side left side again", "stitch join keeps a repeated phrase")
 
 # A quiet moment just before a loud edge moves the cut earlier. Loud audio does not.
 quiet = np.concatenate([
@@ -448,6 +424,11 @@ check(should_prewarm("wired", False) is True, "a closed wired mic can pre-warm")
 check(should_prewarm("hands-free", False) is False, "Bluetooth waits for the main key")
 check(should_prewarm("unknown", False) is False, "an unknown input waits for the main key")
 check(should_prewarm("wired", True) is False, "an open mic is not pre-warmed again")
+from saytray.dictation import _PKEY_DEVICE_BUS, _PKEY_DEVICE_ENUMERATOR, propvariant_size
+check(propvariant_size() == 24, f"PROPVARIANT is 24 bytes, got {propvariant_size()}")
+check(_PKEY_DEVICE_BUS == ("b3f8fa53-0004-438e-9003-51a46e139bfc", 2), "Bluetooth is read from the endpoint bus path")
+check(_PKEY_DEVICE_ENUMERATOR[1] == 24, "the enumerator name is read too")
+check("PropVariantClear" in open(os.path.join(os.path.dirname(__file__), "..", "saytray", "dictation.py"), encoding="utf-8").read(), "the property string is freed")
 
 class _Live:
     active = True

@@ -62,8 +62,9 @@ enum InputRoute {
     let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<CFString>.alignment)
     defer { raw.deallocate() }
     guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return "" }
-    let cf = raw.load(as: CFString.self)
-    return cf as String
+    // GetPropertyData returns a +1 CFString. takeRetainedValue releases it.
+    let held = raw.load(as: Unmanaged<CFString>.self)
+    return held.takeRetainedValue() as String
   }
 
   private static func defaultTransport() -> UInt32 {
@@ -92,8 +93,8 @@ final class Dictation {
 
   private let preRollLimit = 0.45
   private let segmentLimit = DictationPlan.segmentLimit
-  /// Copied onto both sides of a 30 s cut so a word on the boundary is heard twice, then deduped.
-  private let sliceOverlap = 1.0
+  /// Slices do not share audio. Overlap made repeated phrases and lost more words.
+  private let sliceOverlap = 0.0
   private let minLive = 0.15
   private let graceSeconds = 0.25
 
@@ -521,7 +522,7 @@ final class Dictation {
 
   private func recognizeAll(_ chunks: [[AVAudioPCMBuffer]], index: Int, parts: [String], done: @escaping (String) -> Void) {
     if index >= chunks.count {
-      done(DictationSpacing.joinOverlapped(parts))
+      done(DictationSpacing.join(parts))
       return
     }
     let audio = audioSeconds(chunks[index])

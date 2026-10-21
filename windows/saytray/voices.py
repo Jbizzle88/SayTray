@@ -215,7 +215,13 @@ def discard_written(paths):
 
 
 def installed_ids(directory=None):
-    return [v["id"] for v in voices() if is_installed(v, directory)]
+    """Voices already trusted by a marker or a finished background hash.
+
+    This does not read the model. Startup used to hash every unmarked file
+    here, which stalled the first launch. start_trust_check does that off
+    to the side, and setup writes the marker so a new install is trusted at once.
+    """
+    return [v["id"] for v in voices() if is_installed_quick(v, directory)]
 
 
 def remove_retired_voices(directory=None):

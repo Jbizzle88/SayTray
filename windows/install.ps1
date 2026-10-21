@@ -66,6 +66,11 @@ function Test-FileSha([string]$Path, [string]$Expect) {
   return $got.ToLower() -eq $Expect.ToLower()
 }
 
+function Write-VoiceMarker([string]$Path, [string]$Hash) {
+  if ([string]::IsNullOrWhiteSpace($Hash)) { return }
+  [System.IO.File]::WriteAllText("$Path.sha256", $Hash.ToLower() + "`n")
+}
+
 $py = (Get-Command py -ErrorAction SilentlyContinue)
 $venv = Join-Path $R "venv"
 if ((Test-Path $venv) -and -not (Test-VenvHealthy $venv)) {
@@ -148,6 +153,9 @@ if (!$SkipVoices) {
           Remove-Item $o -Force -ErrorAction SilentlyContinue
           throw "checksum mismatch: $($file.filename)"
         }
+        Write-VoiceMarker $o $hash
+      } else {
+        Write-VoiceMarker $o $hash
       }
     }
   }
