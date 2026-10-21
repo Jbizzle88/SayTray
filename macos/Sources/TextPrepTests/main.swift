@@ -57,6 +57,19 @@ func spaced(_ parts: [String]) -> String {
 check(spaced(["hello", "there"]) == "hello there", "back to back words")
 check(spaced(["hello", "there", "friend"]) == "hello there friend", "three inserts in order")
 check(spaced(["hello\n", "there"]) == "hello\nthere", "newline then word")
+check(DictationSpacing.prepare(" there", previous: " ") == "there", "prepare drops a second space")
+check(DictationSpacing.prepare("  there", previous: "o") == " there", "prepare trims then adds one space")
+check(DictationSpacing.prepare("there", previous: "o") == " there", "prepare spaces a bare word")
+check(DictationSpacing.prepare(" \n ", previous: "o") == "", "prepare drops whitespace-only")
+check(DictationSpacing.prepare("hello", previous: nil) == "hello", "prepare at empty field")
+func prepared(_ parts: [String]) -> String {
+  var typed = ""
+  for p in parts { typed += DictationSpacing.prepare(p, previous: typed.last) }
+  return typed
+}
+check(prepared(["hello", " there"]) == "hello there", "prepare back to back one space")
+check(prepared(["hello ", " there"]) == "hello there", "prepare no double space")
+check(prepared(["hello", "there", "friend"]) == "hello there friend", "prepare three in order")
 
 check(!DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: 0.2, lastWordEnd: 29.5, failed: false, characters: 400), "full slice kept")
 check(DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: 18, lastWordEnd: 29, failed: false, characters: 80), "first word late")

@@ -31,6 +31,7 @@ final class Dictation {
   private var firstLiveAt: Date?
   private var phase: Phase = .idle
   private var generation = 0
+  private var shuttingDown = false
   private var jobs: [Job] = []
   private var pumping = false
   private var loggedCopyFail = false
@@ -76,6 +77,10 @@ final class Dictation {
 
   func start() {
     if !Thread.isMainThread { DispatchQueue.main.async { self.start() }; return }
+    if shuttingDown {
+      Log.event("dictation: start ignored, shutting down")
+      return
+    }
     if phase == .recording || phase == .arming {
       Log.event("dictation: start ignored, already \(phase.rawValue)")
       return
@@ -131,6 +136,36 @@ final class Dictation {
       Log.event("dictation: queued gen \(gen) (\(jobs.count) in line)")
       pump()
     }
+  }
+
+  /// Stop the microphone and drop any clip still being recognized. Does not type.
+  func shutdown() {
+    let work = {
+      self.shuttingDown = true
+      self.generation += 1
+      self.audioLock.lock()
+      self.capturing = false
+      self.session.removeAll()
+      self.ring.removeAll()
+      self.ringSeconds = 0
+      self.audioLock.unlock()
+      self.jobs.removeAll()
+      self.phase = .idle
+      self.setRecordingUI(false)
+      if let eng = self.engine {
+        _ = SBTryObjC {
+          eng.inputNode.removeTap(onBus: 0)
+          if eng.isRunning { eng.stop() }
+        }
+      }
+      self.engine = nil
+      if let o = self.configObs {
+        NotificationCenter.default.removeObserver(o)
+        self.configObs = nil
+      }
+      Log.event("dictation: shutdown")
+    }
+    if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
   }
 
   private func engage(_ gen: Int) {
@@ -217,6 +252,7 @@ final class Dictation {
   }
 
   private func pump() {
+    guard !shuttingDown else { pumping = false; jobs.removeAll(); return }
     guard !pumping, !jobs.isEmpty else { return }
     pumping = true
     let job = jobs.removeFirst()
@@ -224,6 +260,11 @@ final class Dictation {
     Log.event("dictation: kept \(sec(job.seconds))s in \(job.buffers.count) buffers with no duration cap; \(chunks.count) slices of <=\(Int(segmentLimit))s, \(jobs.count) still queued")
     recognizeAll(chunks, index: 0, parts: []) { [weak self] text in
       guard let self else { return }
+      if self.shuttingDown {
+        self.pumping = false
+        Log.event("dictation: dropped transcript gen \(job.gen) (shut down)")
+        return
+      }
       Log.event("dictation: gen \(job.gen) audio \(sec(job.seconds))s transcript \(text.count) chars across \(chunks.count) slices")
       if !text.isEmpty { self.onText?(text) }
       self.pumping = false

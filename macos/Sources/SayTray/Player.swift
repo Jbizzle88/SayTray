@@ -84,13 +84,16 @@ enum Chime {
       DispatchQueue.main.async { preload() }
       return
     }
-    guard !loaded else { return }
-    loaded = true
-    startSound = makeSound("start")
-    stopSound = makeSound("stop")
-    startPlayer = makePlayer("start")
-    stopPlayer = makePlayer("stop")
-    Log.event("chime: preloaded NSSound start=\(startSound != nil) stop=\(stopSound != nil) AVAudioPlayer start=\(startPlayer != nil) stop=\(stopPlayer != nil)")
+    if loaded, startSound != nil, stopSound != nil, startPlayer != nil, stopPlayer != nil { return }
+    let wasLoaded = loaded
+    if startSound == nil { startSound = makeSound("start") }
+    if stopSound == nil { stopSound = makeSound("stop") }
+    if startPlayer == nil { startPlayer = makePlayer("start") }
+    if stopPlayer == nil { stopPlayer = makePlayer("stop") }
+    loaded = (startSound != nil || startPlayer != nil) && (stopSound != nil || stopPlayer != nil)
+    if !wasLoaded || !loaded {
+      Log.event("chime: preloaded NSSound start=\(startSound != nil) stop=\(stopSound != nil) AVAudioPlayer start=\(startPlayer != nil) stop=\(stopPlayer != nil)")
+    }
   }
 
   /// Play on the main thread. Returns whether a player reported that playback started.

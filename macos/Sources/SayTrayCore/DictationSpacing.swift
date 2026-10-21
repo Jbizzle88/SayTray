@@ -6,6 +6,11 @@ public enum DictationSpacing {
   /// Prepend one space when `previous` is a real character and `text` does not
   /// already start with space or punctuation. No space at the start of a field,
   /// after whitespace or a newline, or when that would make a double space.
+  /// Trim the recognizer text, then apply the one-space rule. Whitespace-only input becomes empty.
+  public static func prepare(_ text: String, previous: Character?) -> String {
+    apply(text.trimmingCharacters(in: .whitespacesAndNewlines), previous: previous)
+  }
+
   public static func apply(_ text: String, previous: Character?) -> String {
     guard let first = text.first else { return text }
     if first.isWhitespace || isPunctuation(first) { return text }

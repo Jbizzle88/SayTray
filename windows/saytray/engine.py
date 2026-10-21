@@ -26,8 +26,11 @@ class PiperEngine:
 
     # public API
     def ensure(self, voice_name):
-        """Load (or switch to) a voice. Non-blocking; requests queue until it's ready."""
-        if not os.path.exists(os.path.join(VOICES, voice_name + ".onnx")):
+        """Load (or switch to) a voice. Non-blocking; requests queue until it's ready.
+        A short or corrupt download is not loaded."""
+        from .voices import by_id, is_installed
+        voice = by_id(voice_name)
+        if voice is None or not is_installed(voice):
             return False
         with self._cv:
             if voice_name != self.voice_name and voice_name != self._want_voice:

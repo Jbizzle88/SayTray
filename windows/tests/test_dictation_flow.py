@@ -2,7 +2,7 @@
 import collections, os, sys
 import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from saytray.spacing import apply, merge, join_segments, simulate_inserts
+from saytray.spacing import apply, merge, join_segments, prepare, simulate_inserts
 from saytray.preroll import Ring, split_pcm
 from saytray.segments import SEGMENT_S, needs_resplit, stitch_audio
 from saytray.player import queue_chime
@@ -29,9 +29,19 @@ check(apply("(note)", "o") == "(note)", "opening punctuation")
 check(apply("", "o") == "", "empty text")
 check(simulate_inserts(["hello", "there"]) == "hello there", "back to back")
 check(simulate_inserts(["hello", "there", "friend"]) == "hello there friend", "three in order")
-check(simulate_inserts(["hello\n", "there"]) == "hello\nthere", "after newline")
+check(simulate_inserts(["hello\n", "there"]) == "hello there", "a trailing newline on a phrase is trimmed")
+check(prepare("there", "\n") == "there", "no space when the cursor is after a newline")
 check(simulate_inserts(["hello ", "there"]) == "hello there", "previous space kept once")
 check(simulate_inserts(["hello", ", and more"]) == "hello, and more", "punctuation stays attached")
+check(prepare(" there", " ") == "there", "prepare drops a second space")
+check(prepare("  there", "o") == " there", "prepare trims then adds one space")
+check(prepare("there", "o") == " there", "prepare spaces a bare word")
+check(prepare(" \n ", "o") == "", "prepare drops whitespace-only")
+check(prepare("hello", None) == "hello", "prepare at empty field")
+check(prepare("café — “hi”", "o") == " café — “hi”", "prepare keeps special characters")
+check(simulate_inserts(["hello", " there"]) == "hello there", "extra leading space is one space")
+check(simulate_inserts(["hello ", " there"]) == "hello there", "no double space when both sides have space")
+check(simulate_inserts(["hello", "there", "friend"]) == "hello there friend", "prepare three in order")
 
 check(merge("hello there", "friend") == "hello there friend", "new segment appended")
 check(merge("hello world", "hello world and more") == "hello world and more", "partial grew")
@@ -144,6 +154,41 @@ pieces = split_pcm(full, 16000, SEGMENT_S)
 check(len(pieces) == 10, f"5 min is 10 slices of 30s, got {len(pieces)}")
 check(sum(len(p) for p in pieces) == len(full), "5 min split drops nothing")
 check(pieces[0][0] == 0 and pieces[-1][-1] == full[-1], "5 min keeps the first and last sample")
+
+from saytray.selection import VK_RETURN, unicode_events
+from saytray.config import coerce_bool, sanitize
+
+events = unicode_events("a\r\nb")
+check(events == [("u", ord("a")), ("vk", VK_RETURN), ("u", ord("b"))], f"newline is enter, CR skipped: {events}")
+grin = unicode_events("😀")
+check(grin == [("u", 0xD83D), ("u", 0xDE00)], f"emoji is a surrogate pair: {grin}")
+cafe = unicode_events("café")
+check(cafe[3] == ("u", ord("é")), f"accented character stays one unit: {cafe}")
+long_text = "Hello, world! " * 400
+check(len(unicode_events(long_text)) == len(long_text), "long text keeps every character")
+
+bad = sanitize({
+    "speed": "fast",
+    "chime": "false",
+    "start_with_windows": "true",
+    "read_hotkey": "not a key",
+    "dictate_hotkey": "ctrl+alt+space",
+    "speaker": -3,
+    "voice": "",
+    "extra": "junk",
+})
+check(bad["speed"] == 1.0, "bad speed falls back")
+check(bad["chime"] is False, 'string "false" is not True')
+check(coerce_bool("false", True) is False, "coerce_bool rejects the string false")
+check(bad["start_with_windows"] is True, "string true is True")
+check(bad["read_hotkey"] == "alt+`", f"bad hotkey falls back: {bad['read_hotkey']}")
+check(bad["dictate_hotkey"] == "ctrl+alt+space", "good hotkey kept")
+check(bad["speaker"] == 0, "negative speaker falls back")
+check(bad["voice"] == "en_US-norman-medium", "empty voice falls back")
+check("extra" not in bad, "unknown settings are dropped")
+check(sanitize({"speed": 9, "chime": 0})["speed"] == 2.0, "speed clamps to 2")
+check(sanitize({"speed": 0.1})["speed"] == 0.5, "speed clamps to 0.5")
+check(sanitize({"chime": False})["chime"] is False, "real false stays false")
 
 print(f"dictation flow tests: {passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

@@ -51,7 +51,10 @@ final class AppState: ObservableObject {
   @Published var isRecording = false { didSet { onStatusChanged?() } }
   @Published var chime: Bool { didSet { d.set(chime, forKey: "chime") } }
   init() {
-    speed = d.object(forKey: "speed") as? Double ?? 1.0
+    let rawSpeed = d.object(forKey: "speed") as? Double ?? 1.0
+    let clamped = rawSpeed.isFinite ? min(2.0, max(0.5, rawSpeed)) : 1.0
+    speed = clamped
+    if clamped != rawSpeed { d.set(clamped, forKey: "speed") }
     voiceID = d.string(forKey: "voiceID") ?? AppState.bestSystemVoice()
     engine = d.string(forKey: "engine") ?? "piper"
     let saved = d.string(forKey: "piperVoice") ?? ""

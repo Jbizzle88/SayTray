@@ -71,14 +71,30 @@ main() {
   fi
 
   download() {
-    local name="$1" url="$2"
-    local out="$VOICES/$name"
-    if [ -f "$out" ] && [ -s "$out" ]; then
-      echo "  already have $name"
-      return 0
+    local name="$1" url="$2" expect="${3:-0}"
+    local out="$VOICES/$name" got
+    if [ -f "$out" ]; then
+      got=$(wc -c < "$out" | tr -d '[:space:]')
+      if { [ "$expect" -gt 0 ] && [ "$got" -eq "$expect" ]; } || { [ "$expect" -le 0 ] && [ "$got" -gt 0 ]; }; then
+        echo "  already have $name"
+        return 0
+      fi
+      echo "  replacing incomplete $name ($got of $expect bytes)"
+      rm -f "$out"
     fi
     echo "  downloading $name …"
     curl -fL --retry 3 --progress-bar -o "$out.partial" "$url"
+    got=$(wc -c < "$out.partial" | tr -d '[:space:]')
+    if [ "$expect" -gt 0 ] && [ "$got" -ne "$expect" ]; then
+      rm -f "$out.partial"
+      echo "  incomplete download: $name ($got of $expect bytes)" >&2
+      exit 1
+    fi
+    if [ "${got:-0}" -le 0 ]; then
+      rm -f "$out.partial"
+      echo "  incomplete download: $name (empty)" >&2
+      exit 1
+    fi
     mv "$out.partial" "$out"
   }
 
@@ -94,20 +110,20 @@ for voice_id in cat.get("removed") or []:
     print(f"remove\t{voice_id}\t")
 for v in defaults:
     for f in v["files"]:
-        print(f"file\t{f['filename']}\t{f['url']}")
+        print(f"file\t{f['filename']}\t{f['url']}\t{int(f.get('sizeBytes') or 0)}")
 PY
 )"
 
   local TOTAL_MB
   TOTAL_MB="$(printf '%s\n' "$LIST" | awk -F'\t' '$1=="total" { printf "%d", ($2/1048576)+0.5 }')"
   echo "Downloading default voices (about ${TOTAL_MB} MB)…"
-  printf '%s\n' "$LIST" | while IFS="$(printf '\t')" read -r kind name url; do
+  printf '%s\n' "$LIST" | while IFS="$(printf '\t')" read -r kind name url size; do
     case "$kind" in
       remove)
         rm -f "$VOICES/$name.onnx" "$VOICES/$name.onnx.json" "$VOICES/$name.onnx.partial"
         ;;
       file)
-        download "$name" "$url"
+        download "$name" "$url" "${size:-0}"
         ;;
     esac
   done

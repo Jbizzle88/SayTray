@@ -81,12 +81,22 @@ req = open(os.path.join(ROOT, "windows", "requirements.txt"), encoding="utf-8").
 check(any(line.strip() == "piper-tts==1.8.0" for line in req), "piper-tts pinned to 1.8.0")
 check(not any(line.strip() == "piper-tts" for line in req), "unpinned piper-tts removed")
 
+def write_voice(directory, voice_id):
+    v = voices.by_id(voice_id)
+    for f in v["files"]:
+        path = os.path.join(directory, f["filename"])
+        with open(path, "wb") as fh:
+            fh.truncate(int(f["sizeBytes"]))
+
 with tempfile.TemporaryDirectory() as d:
     for voice_id in banned:
         open(os.path.join(d, voice_id + ".onnx"), "wb").write(b"x")
         open(os.path.join(d, voice_id + ".onnx.json"), "wb").write(b"{}")
-    open(os.path.join(d, "en_US-norman-medium.onnx"), "wb").write(b"model")
-    open(os.path.join(d, "en_US-norman-medium.onnx.json"), "wb").write(b"{}")
+    write_voice(d, "en_US-norman-medium")
+    short = os.path.join(d, "en_US-ljspeech-high.onnx")
+    with open(short, "wb") as fh:
+        fh.truncate(4)
+    check(not voices.is_installed(voices.by_id("en_US-ljspeech-high"), d), "short file is not an installed voice")
     check(voices.installed_ids(d) == ["en_US-norman-medium"], "retired files are not offered as voices")
     check(voices.playback_voice("en_US-ryan-high", voices.installed_ids(d)) == "en_US-norman-medium", "playback ignores retired files")
     gone = voices.remove_retired_voices(d)
@@ -136,6 +146,21 @@ def _check_downloader():
             dest = os.path.join(d, "sample.onnx")
             voices.downloads._download(f"http://127.0.0.1:{server.server_address[1]}/sample.onnx", dest, 0, len(payload), len(payload), "sample")
             check(open(dest, "rb").read() == payload, "downloader writes the response")
+            short = os.path.join(d, "short.onnx")
+            rejected = False
+            message = ""
+            try:
+                voices.downloads._download(
+                    f"http://127.0.0.1:{server.server_address[1]}/sample.onnx",
+                    short, 0, 100, 100, "short")
+            except Exception as e:
+                rejected = True
+                message = str(e)
+            check(rejected and "incomplete" in message, f"short body rejected: {message}")
+            check(not os.path.exists(short) and not os.path.exists(short + ".partial"), "short download leaves no file")
+            check(voices.size_matches(len(payload), len(payload)), "exact size matches")
+            check(not voices.size_matches(len(payload) - 1, len(payload)), "short size does not match")
+            check(not voices.size_matches(0, 0), "empty file is not a match when size is unknown")
             missing = os.path.join(d, "missing.onnx")
             failed = False
             try:

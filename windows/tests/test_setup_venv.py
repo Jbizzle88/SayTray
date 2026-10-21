@@ -29,6 +29,10 @@ check(" -m pip " in setup or "-m pip " in setup, "setup_piper.sh installs with p
 check("Piper venv is broken" in install, "install.ps1 explains a broken venv")
 check("Test-VenvHealthy" in install, "install.ps1 probes the venv")
 check("-m pip" in install, "install.ps1 installs with python -m pip")
+check("incomplete download" in setup, "setup_piper.sh rejects a short download")
+check("sizeBytes" in setup, "setup_piper.sh passes the catalog size")
+check("incomplete download" in install, "install.ps1 rejects a short download")
+check("$expect" in install and "sizeBytes" in install, "install.ps1 compares file length to sizeBytes")
 
 def write(path, body):
     os.makedirs(os.path.dirname(path), exist_ok=True)

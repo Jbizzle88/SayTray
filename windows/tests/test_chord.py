@@ -67,5 +67,15 @@ got = drive("ctrl+alt+space", [
 ])
 check(got == [None, None, "down", "up", None, None, None, None, "down"], f"fresh chord after full release: {got}")
 
+# Twenty full press/release cycles, the way a hotkey gets spammed.
+cycle = [("ctrl", True), ("alt", True), ("space", True), ("space", False), ("alt", False), ("ctrl", False)]
+got = drive("ctrl+alt+space", cycle * 20)
+expect = [None, None, "down", "up", None, None] * 20
+check(got == expect, f"20 rapid cycles stay paired: downs={got.count('down')} ups={got.count('up')}")
+
+# Key-repeat spam while the chord is held is still one session.
+got = drive("ctrl+alt+space", [("ctrl", True), ("alt", True)] + [("space", True)] * 20 + [("space", False)])
+check(got.count("down") == 1 and got.count("up") == 1, f"repeat spam is one session: {got.count('down')} down {got.count('up')} up")
+
 print(f"Chord tests: {passes} passed, {failures} failed")
 sys.exit(0 if failures == 0 else 1)

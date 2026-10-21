@@ -212,6 +212,14 @@ class App:
     def _quit(self, icon=None, item=None):
         logs.event("quit")
         self.hotkeys.clear()
+        try:
+            self.dictation.shutdown()
+        except Exception:
+            pass
+        try:
+            downloads.shutdown()
+        except Exception:
+            pass
         self.speaker.stop()
         self.icon.stop()
         os._exit(0)

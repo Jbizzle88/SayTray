@@ -12,6 +12,11 @@ def _punct(ch):
     return ch in _PUNCT
 
 
+def prepare(text, previous):
+    """Strip the recognizer text, then apply the one-space rule."""
+    return apply((text or "").strip(), previous)
+
+
 def apply(text, previous):
     """previous is one character or None (empty field / unknown boundary)."""
     if not text:
@@ -52,6 +57,6 @@ def simulate_inserts(parts):
     """Type parts in order, using the last typed character as the cursor context."""
     typed = ""
     for part in parts:
-        piece = apply(part, typed[-1] if typed else None)
+        piece = prepare(part, typed[-1] if typed else None)
         typed += piece
     return typed

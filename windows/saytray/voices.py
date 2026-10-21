@@ -83,17 +83,32 @@ def playback_voice(requested, installed):
     return None
 
 
-def _nonempty(path):
+def size_matches(got, expected):
+    """A catalog file is installed only at its exact size. Unknown sizes still reject empty files."""
     try:
-        return os.path.isfile(path) and os.path.getsize(path) > 0
-    except OSError:
+        got = int(got)
+        expected = int(expected or 0)
+    except (TypeError, ValueError):
         return False
+    if expected > 0:
+        return got == expected
+    return got > 0
 
 
 def is_installed(v, directory=None):
     directory = directory or VOICES
     files = v.get("files") or []
-    return bool(files) and all(_nonempty(os.path.join(directory, f["filename"])) for f in files)
+    if not files:
+        return False
+    for f in files:
+        path = os.path.join(directory, f["filename"])
+        try:
+            got = os.path.getsize(path) if os.path.isfile(path) else 0
+        except OSError:
+            return False
+        if not size_matches(got, f.get("sizeBytes") or 0):
+            return False
+    return True
 
 
 def installed_ids(directory=None):
@@ -158,6 +173,13 @@ class Downloads:
         self._queue = []
         self._current = None
         self._listeners = []
+        self._stop = False
+
+    def shutdown(self):
+        """Drop queued downloads. An in-progress file stays a .partial and is not installed."""
+        with self._mu:
+            self._stop = True
+            self._queue.clear()
 
     def add_listener(self, fn):
         with self._mu:
@@ -172,7 +194,7 @@ class Downloads:
             return [(vid, dict(st)) for vid, st in self._status.items() if st.get("state") == "downloading"]
 
     def start(self, voice_id):
-        if not by_id(voice_id):
+        if self._stop or not by_id(voice_id):
             return False
         with self._mu:
             st = self._status.get(voice_id) or {}
@@ -253,8 +275,10 @@ class Downloads:
                         counted = min(got, file_size) if file_size else got
                         frac = min(0.99, (done + counted) / float(total or 1))
                         self._set(voice_id, state="downloading", fraction=frac, message=f"Downloading… {int(frac * 100)}%")
-            if not _nonempty(tmp):
-                raise RuntimeError("empty download")
+            if self._stop:
+                raise RuntimeError("download cancelled")
+            if not size_matches(got, file_size):
+                raise RuntimeError(f"incomplete download ({got} of {file_size} bytes)")
             os.replace(tmp, dest)
         except Exception:
             if os.path.isfile(tmp):
