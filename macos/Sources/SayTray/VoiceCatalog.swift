@@ -68,15 +68,61 @@ enum VoiceCatalog {
 
   static func isInstalled(_ voice: CatalogVoice) -> Bool {
     !voice.files.isEmpty && voice.files.allSatisfy {
-      fileMatches(voicesDirectory().appendingPathComponent($0.filename), expected: $0.sizeBytes)
+      fileTrusted(voicesDirectory().appendingPathComponent($0.filename), expected: $0.sizeBytes, sha: $0.sha256)
     }
   }
+
+  static func markerURL(_ url: URL) -> URL {
+    URL(fileURLWithPath: url.path + ".sha256")
+  }
+
+  static func writeHashMarker(_ url: URL, sha: String) {
+    let expect = sha.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !expect.isEmpty else { return }
+    try? Data((expect + "\n").utf8).write(to: markerURL(url), options: .atomic)
+  }
+
+  /// Size match, then the catalog hash. A matching `.sha256` marker skips reading the file again.
+  /// A missing or wrong marker hashes the file once for that size and modification time.
+  static func fileTrusted(_ url: URL, expected: Int, sha: String?) -> Bool {
+    guard fileMatches(url, expected: expected) else { return false }
+    let expect = (sha ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if expect.isEmpty { return true }
+    if let stored = try? String(contentsOf: markerURL(url), encoding: .utf8),
+       stored.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expect {
+      return true
+    }
+    let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+    let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+    let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    let key = "\(url.path)|\(size)|\(mtime)|\(expect)"
+    trustLock.lock()
+    if let cached = trustCache[key] {
+      trustLock.unlock()
+      return cached
+    }
+    trustLock.unlock()
+    guard let digest = sha256Hex(url) else { return false }
+    let ok = digest == expect
+    if ok {
+      writeHashMarker(url, sha: digest)
+    } else {
+      try? FileManager.default.removeItem(at: markerURL(url))
+    }
+    trustLock.lock()
+    trustCache[key] = ok
+    trustLock.unlock()
+    return ok
+  }
+
+  private static let trustLock = NSLock()
+  private static var trustCache: [String: Bool] = [:]
 
   static func removeRetired() {
     guard let removed = file?.removed else { return }
     let dir = voicesDirectory()
     for id in removed {
-      for name in ["\(id).onnx", "\(id).onnx.json", "\(id).onnx.partial"] {
+      for name in ["\(id).onnx", "\(id).onnx.json", "\(id).onnx.partial", "\(id).onnx.sha256", "\(id).onnx.json.sha256"] {
         try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
       }
     }
@@ -134,6 +180,7 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
   private struct Job { var voice: CatalogVoice; var index: Int; var bytesBefore: Int64; var wrote: [String] }
   private var jobs: [String: Job] = [:]
   private var taskVoice: [Int: String] = [:]
+  private var liveTask: [String: URLSessionDownloadTask] = [:]
 
   override init() {
     super.init()
@@ -162,12 +209,40 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
 
   func shutdown() {
     lock.lock()
+    let tasks = Array(liveTask.values)
     jobs.removeAll()
     taskVoice.removeAll()
+    liveTask.removeAll()
     let live = session
     lock.unlock()
+    for task in tasks { task.cancel() }
     live?.invalidateAndCancel()
     Log.event("voices: downloads cancelled")
+  }
+
+  /// Stop one download and return the row to idle. A click after it has finished does nothing.
+  func cancel(_ id: String) {
+    lock.lock()
+    let task = liveTask.removeValue(forKey: id)
+    if let task { taskVoice.removeValue(forKey: task.taskIdentifier) }
+    let wrote = jobs[id]?.wrote ?? []
+    let active = jobs[id] != nil || task != nil
+    jobs[id] = nil
+    lock.unlock()
+    guard active else { return }
+    task?.cancel()
+    let dir = VoiceCatalog.voicesDirectory()
+    for name in wrote {
+      let dest = dir.appendingPathComponent(name)
+      try? FileManager.default.removeItem(at: dest)
+      try? FileManager.default.removeItem(at: URL(fileURLWithPath: dest.path + ".partial"))
+      try? FileManager.default.removeItem(at: VoiceCatalog.markerURL(dest))
+    }
+    DispatchQueue.main.async {
+      self.fraction[id] = nil
+      self.message[id] = nil
+      self.refresh()
+    }
   }
 
   func delete(_ id: String) {
@@ -189,7 +264,10 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
     }
     let dir = VoiceCatalog.voicesDirectory()
     for file in voice.files {
-      try? FileManager.default.removeItem(at: dir.appendingPathComponent(file.filename))
+      let dest = dir.appendingPathComponent(file.filename)
+      try? FileManager.default.removeItem(at: dest)
+      try? FileManager.default.removeItem(at: URL(fileURLWithPath: dest.path + ".partial"))
+      try? FileManager.default.removeItem(at: VoiceCatalog.markerURL(dest))
     }
     DispatchQueue.main.async {
       self.fraction[id] = nil
@@ -209,6 +287,7 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
     let task = session.downloadTask(with: request)
     lock.lock()
     taskVoice[task.taskIdentifier] = id
+    liveTask[id] = task
     lock.unlock()
     task.resume()
   }
@@ -217,6 +296,7 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
     lock.lock()
     let wrote = jobs[id]?.wrote ?? []
     jobs[id] = nil
+    liveTask[id] = nil
     lock.unlock()
     let dir = VoiceCatalog.voicesDirectory()
     for name in wrote {
@@ -273,6 +353,13 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
         return
       }
     }
+    lock.lock()
+    let still = jobs[id] != nil
+    lock.unlock()
+    if !still {
+      try? FileManager.default.removeItem(at: location)
+      return
+    }
     let dir = VoiceCatalog.voicesDirectory()
     let dest = dir.appendingPathComponent(file.filename)
     do {
@@ -288,6 +375,9 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
       fail(id, "Could not save \(file.filename)")
       return
     }
+    if let expect = file.sha256?.lowercased(), !expect.isEmpty {
+      VoiceCatalog.writeHashMarker(dest, sha: expect)
+    }
     let wrote = job.wrote + [file.filename]
     let next = job.index + 1
     if next < job.voice.files.count {
@@ -299,6 +389,7 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
     }
     lock.lock()
     jobs[id] = nil
+    liveTask[id] = nil
     lock.unlock()
     DispatchQueue.main.async {
       self.fraction[id] = 1
@@ -313,9 +404,13 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
     guard let error else { return }
+    let ns = error as NSError
+    if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
     lock.lock()
     let id = taskVoice.removeValue(forKey: task.taskIdentifier)
+    if let id, liveTask[id] === task { liveTask[id] = nil }
+    let job = id.flatMap { jobs[$0] }
     lock.unlock()
-    if let id { fail(id, "Download failed: \(error.localizedDescription)") }
+    if let id, job != nil { fail(id, "Download failed: \(error.localizedDescription)") }
   }
 }

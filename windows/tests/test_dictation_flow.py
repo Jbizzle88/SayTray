@@ -27,6 +27,14 @@ check(apply(", and", "o") == ", and", "comma")
 check(apply(". Next", "o") == ". Next", "period")
 check(apply("(note)", "o") == " (note)", "opening parenthesis is spaced")
 check(apply('"Stop."', "o") == ' "Stop."', "opening quote is spaced")
+check(apply('" and', "o") == '" and', "a closing quote stays attached")
+check(apply("'", "o") == "'", "a lone quote stays attached")
+check(apply("<3", "o") == "<3", "a symbol stays attached")
+check(apply("+1", "o") == "+1", "plus stays attached")
+check(merge("He said", '"Stop."') == 'He said "Stop."', "opening quote in a sentence")
+check(merge("Stop", '" and') == 'Stop" and', "closing quote joins the previous word")
+check(merge("See", "(attached)") == "See (attached)", "opening parenthesis in a sentence")
+check(merge("price is", "$40") == "price is $40", "dollar amount in a sentence")
 check(apply("$5", "o") == " $5", "dollar amount is spaced")
 check(apply("” end", "o") == "” end", "closing quote stays attached")
 check(apply("", "o") == "", "empty text")
@@ -174,7 +182,7 @@ check(len(quiet_parts[0]) < 100, f"quiet cut moved earlier: {len(quiet_parts[0])
 check(np.array_equal(np.concatenate(quiet_parts), quiet), "quiet cut drops nothing")
 
 from saytray.selection import VK_RETURN, split_typing_steps, unicode_events
-from saytray.config import backup_unreadable, coerce_bool, coerce_hotkey, sanitize, write_atomic
+from saytray.config import backup_unreadable, coerce_bool, coerce_hotkey, hotkey_ok, hotkey_registerable, read_settings, sanitize, write_atomic
 
 events = unicode_events("a\r\nb")
 check(events == [("u", ord("a")), ("vk", VK_RETURN), ("u", ord("b"))], f"newline is enter, CR skipped: {events}")
@@ -215,9 +223,9 @@ check(sanitize({"chime": False})["chime"] is False, "real false stays false")
 import json, tempfile, threading, time
 import saytray.selection as sel
 import saytray.dictation as dmod
-from saytray.dictation import Dictation, keep_whisper_segment, slice_is_silent
+from saytray.dictation import Dictation, idle_seconds_for_input, input_releases_quickly, keep_whisper_segment, slice_is_silent
 from saytray.hotkeys import HotkeySerial
-from saytray.logs import rotate_if_big
+from saytray.logs import purge_legacy_text_logs, rotate_if_big
 from saytray.player import markers_after_callback
 
 steps = split_typing_steps(unicode_events("hi\nthere"))
@@ -237,31 +245,68 @@ _fake_user = _FakeUser32()
 _old_user = sel._user32
 _old_wait = sel._wait_mods_released
 sel._user32 = lambda: _fake_user
-sel._wait_mods_released = lambda timeout=1.0: False
-sel._send_unicode("a\nb")
-check(_fake_user.sent == 2, f"Enter is skipped while a modifier is held: {_fake_user.sent}")
-sel._wait_mods_released = lambda timeout=1.0: True
+sel._wait_mods_released = lambda timeout=None: False
+held = False
+try:
+    sel._send_unicode("a\nb")
+except sel.InputIncomplete as e:
+    held = e.sent == 1
+check(held and _fake_user.sent == 1, f"Enter waits, and only the text before it is typed while modifiers stay down: sent={_fake_user.sent}")
+waits = {"n": 0}
+def _release_on_second(timeout=None):
+    waits["n"] += 1
+    return waits["n"] > 1
+sel._wait_mods_released = _release_on_second
 _fake_user.sent = 0
-sel._send_unicode("a\nb")
-check(_fake_user.sent == 3, f"Enter is sent once modifiers are up: {_fake_user.sent}")
+check(sel._send_unicode("a\nb") == 2, "a and b are the unicode units; Enter is not one")
+check(_fake_user.sent == 3, f"Enter is sent in place once the modifiers come up: {_fake_user.sent}")
 sel._user32 = _old_user
 sel._wait_mods_released = _old_wait
 check(sel._wait_mods_released(0.01) in (True, False), "modifier wait returns a bool")
+check(sel.text_after_units("hello world", 5) == " world", "remainder starts after the typed units")
+check(sel.text_after_units("a\nb", 1) == "\nb", "a newline is kept when it was not typed")
+check(sel.text_after_units("😀x", 2) == "x", "an emoji counts as two units")
 
 _old_mods = sel._modifiers_down
 _old_uni = sel._send_unicode
 _old_paste = sel._paste_text
+_old_leave = sel._leave_on_clipboard
+_old_notice = sel.on_notice
 _old_last = sel._last_inserted
-sel._last_inserted = "prior"
-sel._modifiers_down = lambda: True
-sel._send_unicode = lambda text: (_ for _ in ()).throw(OSError("no input"))
-sel._paste_text = lambda text: (_ for _ in ()).throw(OSError("clipboard unavailable"))
-sel.insert_dictation("hello")
-check(sel._last_inserted == "prior", "a failed insert does not move the spacing cursor")
-sel._modifiers_down = _old_mods
-sel._send_unicode = _old_uni
-sel._paste_text = _old_paste
-sel._last_inserted = _old_last
+_old_wait2 = sel._wait_mods_released
+try:
+    sel._last_inserted = "prior"
+    sel._modifiers_down = lambda: True
+    sel._wait_mods_released = lambda timeout=None: False
+    sel._send_unicode = lambda text: (_ for _ in ()).throw(OSError("no input"))
+    sel._paste_text = lambda text: (_ for _ in ()).throw(OSError("clipboard unavailable"))
+    sel.insert_dictation("hello")
+    check(sel._last_inserted == "prior", "a failed insert does not move the spacing cursor")
+
+    pasted = []
+    left = []
+    notices = []
+    sel.on_notice = notices.append
+    sel._paste_text = pasted.append
+    sel._leave_on_clipboard = left.append
+    sel._send_unicode = lambda text: (_ for _ in ()).throw(sel.InputIncomplete(5, "stopped"))
+    ok = sel.type_text("hello world")
+    check(ok is False and pasted == [], f"paste does not run while the shortcut is held: {pasted}")
+    check(left == [" world"], f"the untyped remainder is left on the clipboard: {left}")
+    check(any("clipboard" in n.lower() for n in notices), f"the user is told: {notices}")
+
+    pasted.clear()
+    sel._wait_mods_released = lambda timeout=None: True
+    ok = sel.type_text("hello world")
+    check(ok is True and pasted == [" world"], f"after release, only the remainder is pasted: {pasted}")
+finally:
+    sel._modifiers_down = _old_mods
+    sel._send_unicode = _old_uni
+    sel._paste_text = _old_paste
+    sel._leave_on_clipboard = _old_leave
+    sel.on_notice = _old_notice
+    sel._last_inserted = _old_last
+    sel._wait_mods_released = _old_wait2
 
 with tempfile.TemporaryDirectory() as d:
     path = os.path.join(d, "settings.json")
@@ -277,6 +322,44 @@ with tempfile.TemporaryDirectory() as d:
         fh.write("[]")
     bak2 = backup_unreadable(path)
     check(".bad." in os.path.basename(bak2) and os.path.exists(bak), "a second corrupt file does not overwrite the first backup")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    data, should = read_settings(path)
+    check(data == {} and should is True and os.path.exists(path + ".bad"), "bad JSON is moved aside and will be rewritten")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("[1, 2]")
+    data, should = read_settings(path)
+    check(data == {} and should is True and not os.path.exists(path), "JSON that is not an object is moved aside")
+    blocked = os.path.join(d, "locked.json")
+    os.mkdir(blocked)
+    with open(os.path.join(blocked, "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("stay")
+    data, should = read_settings(blocked)
+    check(data == {} and should is False, "a read error uses in-memory defaults and does not rewrite")
+    check(not os.path.exists(blocked + ".bad") and open(os.path.join(blocked, "keep.txt"), encoding="utf-8").read() == "stay", "a read error does not move the file")
+    missing, should = read_settings(os.path.join(d, "missing.json"))
+    check(missing == {} and should is True, "a missing settings file is not treated as corrupt")
+    for name in ("events.log", "events.log.1", "guard.log", "guard.log.1"):
+        with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+            fh.write("old dictated sentence")
+    last = os.path.join(d, "last")
+    os.makedirs(last)
+    with open(os.path.join(last, "clip.wav"), "wb") as fh:
+        fh.write(b"RIFF")
+    with open(os.path.join(last, "input.txt"), "w", encoding="utf-8") as fh:
+        fh.write("secret")
+    with open(os.path.join(last, "play.log"), "w", encoding="utf-8") as fh:
+        fh.write("played")
+    with open(os.path.join(last, "notes.txt"), "w", encoding="utf-8") as fh:
+        fh.write("keep")
+    check(purge_legacy_text_logs(d) is True, "the first 1.1.0 launch purges old text logs")
+    check(os.path.exists(os.path.join(d, ".purged-1.1.0")), "purge leaves a marker")
+    check(not any(os.path.exists(os.path.join(d, name)) for name in ("events.log", "guard.log.1")), "old logs are gone")
+    check(not os.path.exists(os.path.join(last, "clip.wav")) and not os.path.exists(os.path.join(last, "input.txt")), "old wavs and input notes are gone")
+    check(open(os.path.join(last, "notes.txt"), encoding="utf-8").read() == "keep", "unrelated files in last/ stay")
+    with open(os.path.join(d, "events.log"), "w", encoding="utf-8") as fh:
+        fh.write("newer")
+    check(purge_legacy_text_logs(d) is False and open(os.path.join(d, "events.log"), encoding="utf-8").read() == "newer", "purge runs once")
     logp = os.path.join(d, "events.log")
     with open(logp, "w", encoding="utf-8") as fh:
         fh.write("secret dictated sentence")
@@ -288,7 +371,34 @@ check(not keep_whisper_segment("you", 0.9, -1.0), "high no-speech probability is
 check(not keep_whisper_segment("you", 0.7, -0.6), "quiet low-confidence you is dropped")
 check(keep_whisper_segment("hello there", 0.2, -0.2), "normal speech is kept")
 check(slice_is_silent(np.zeros(1600, np.float32), 16000), "digital silence is skipped")
+check(not slice_is_silent(np.full(1600, 0.002, np.float32), 16000), "quiet speech above 0.001 is kept")
+check(slice_is_silent(np.full(1600, 0.0004, np.float32), 16000), "audio under 0.001 is silence")
 check(not slice_is_silent(np.full(1600, 0.05, np.float32), 16000), "audible audio is kept")
+check(idle_seconds_for_input("MacBook Pro Microphone") == 600, "a built-in mic stays warm for 10 minutes")
+check(idle_seconds_for_input("AirPods Pro") == 20, "Bluetooth is released quickly")
+check(idle_seconds_for_input("Headset (Hands-Free AG Audio)") == 20, "hands-free is released quickly")
+check(idle_seconds_for_input("USB Headset") == 600, "a wired headset stays warm")
+check(idle_seconds_for_input("") == 600 and not input_releases_quickly("unknown"), "an unknown input stays warm")
+check(hotkey_ok("ctrl+alt+ö") and hotkey_ok("ctrl+alt+é"), "a layout-specific hotkey is kept")
+import types
+_kb = types.ModuleType("keyboard")
+def _parse(combo):
+    if "ö" in combo or "é" in combo:
+        raise ValueError("not on this layout")
+    return combo
+_kb.parse_hotkey = _parse
+import sys as _sys
+_prev_kb = _sys.modules.get("keyboard")
+_sys.modules["keyboard"] = _kb
+try:
+    check(hotkey_registerable("ctrl+alt+ö") is False, "a hotkey the layout cannot type is not registered")
+    check(hotkey_ok("ctrl+alt+ö") is True, "that hotkey is still saved")
+    check(hotkey_registerable("ctrl+alt+space") is True, "a normal hotkey still registers")
+finally:
+    if _prev_kb is None:
+        _sys.modules.pop("keyboard", None)
+    else:
+        _sys.modules["keyboard"] = _prev_kb
 
 pending, idle = markers_after_callback(2, 0, True)
 check(pending == 2 and idle is False, "a finished chime does not mark speech idle")
@@ -339,6 +449,12 @@ try:
     audio = np.full(3200, 0.1, np.float32)
     fresh._transcribe(audio, 1)
     check(inserted == ["second phrase"], f"an older dictation still types when a newer one has started: {inserted}")
+    inserted.clear()
+    notices = []
+    fresh._notify = notices.append
+    fresh._transcribe(np.zeros(3200, np.float32), 1)
+    check(inserted == [], "silence is not typed")
+    check(any("didn't hear anything" in n for n in notices), f"silence tells the user: {notices}")
     inserted.clear()
     fresh._closed = True
     fresh._transcribe(audio, 1)

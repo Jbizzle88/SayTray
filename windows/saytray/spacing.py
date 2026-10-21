@@ -14,6 +14,15 @@ def _attached(ch):
     return ch in _ATTACHED
 
 
+def _opening_quote(text):
+    """A straight quote followed by a word is opening. A quote followed by space is closing."""
+    if not text or text[0] not in "\"'":
+        return False
+    if len(text) < 2:
+        return False
+    return not text[1].isspace()
+
+
 def prepare(text, previous):
     """Strip the recognizer text, then apply the one-space rule."""
     return apply((text or "").strip(), previous)
@@ -25,6 +34,8 @@ def apply(text, previous):
         return text
     first = text[0]
     if first.isspace() or _attached(first):
+        return text
+    if first in "\"'" and not _opening_quote(text):
         return text
     if previous is None or (isinstance(previous, str) and (not previous or previous[-1].isspace())):
         return text

@@ -40,6 +40,27 @@ enum Log {
       else { try? data.write(to: url) }
     }
   }
+  /// Once, on the first 1.1.0 launch, drop logs and WAVs that older builds filled with the user's text.
+  static func purgeLegacyOnce() {
+    let marker = root.appendingPathComponent(".purged-1.1.0")
+    if FileManager.default.fileExists(atPath: marker.path) { return }
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    for name in ["events.log", "events.log.1", "guard.log", "guard.log.1"] {
+      try? FileManager.default.removeItem(at: root.appendingPathComponent(name))
+    }
+    let last = root.appendingPathComponent("last")
+    if let items = try? FileManager.default.contentsOfDirectory(at: last, includingPropertiesForKeys: nil) {
+      for url in items {
+        let ext = url.pathExtension.lowercased()
+        let name = url.lastPathComponent.lowercased()
+        if ext == "wav" || name.hasSuffix(".wav.part") || name == "input.txt" || name == "play.log" {
+          try? FileManager.default.removeItem(at: url)
+        }
+      }
+    }
+    try? Data("1.1.0\n".utf8).write(to: marker)
+  }
+
   static func event(_ s: String) { NSLog("SayTray: %@", s); append(s, to: root.appendingPathComponent("events.log")) }
   static func guardTrigger(_ s: String) { event("GUARD " + s); append(s, to: root.appendingPathComponent("guard.log")) }
 }

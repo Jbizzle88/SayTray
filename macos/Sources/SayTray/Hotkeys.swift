@@ -10,11 +10,12 @@ import CoreGraphics
 /// ends the hold. Pressing the key again while the modifier stays down starts a new hold.
 final class HotKeyCenter {
   static let shared = HotKeyCenter()
-  private struct Spec { var key: HotKey; var down: () -> Void; var up: () -> Void; var hold: Bool }
+  private struct Spec { var key: HotKey; var down: () -> Void; var up: () -> Void; var arm: () -> Void; var hold: Bool }
   private var specs: [UInt32: Spec] = [:]
   private var refs: [UInt32: EventHotKeyRef] = [:]
   private var monitors: [Any] = []
   private var holdingIds: Set<UInt32> = []
+  private var armedMods: Set<UInt32> = []
   private var seenHeld: Set<UInt32> = []
   private var missCount: [UInt32: Int] = [:]
   private var watch: Timer?
@@ -82,6 +83,14 @@ final class HotKeyCenter {
       case .keyUp:
         if e.keyCode == UInt16(truncatingIfNeeded: s.key.keyCode) { noteUp(id) }
       case .flagsChanged:
+        if s.hold, modifiersMatch(s.key, e.modifierFlags) {
+          if !armedMods.contains(id) {
+            armedMods.insert(id)
+            s.arm()
+          }
+        } else {
+          armedMods.remove(id)
+        }
         if holdingIds.contains(id), !modifiersMatch(s.key, e.modifierFlags) { noteUp(id) }
       default:
         break
@@ -152,9 +161,10 @@ final class HotKeyCenter {
     return has(UInt32(cmdKey), .command) && has(UInt32(optionKey), .option) && has(UInt32(controlKey), .control) && has(UInt32(shiftKey), .shift)
   }
 
-  func set(id: UInt32, key: HotKey, down: @escaping () -> Void, up: @escaping () -> Void = {}, hold: Bool = false) {
+  func set(id: UInt32, key: HotKey, down: @escaping () -> Void, up: @escaping () -> Void = {}, arm: @escaping () -> Void = {}, hold: Bool = false) {
     if holdingIds.contains(id) { noteUp(id) }
-    specs[id] = Spec(key: key, down: down, up: up, hold: hold)
+    armedMods.remove(id)
+    specs[id] = Spec(key: key, down: down, up: up, arm: arm, hold: hold)
     register(id)
   }
 

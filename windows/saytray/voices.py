@@ -95,6 +95,73 @@ def size_matches(got, expected):
     return got > 0
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def marker_path(path):
+    return path + ".sha256"
+
+
+def write_hash_marker(path, sha):
+    expect = (sha or "").strip().lower()
+    if not expect:
+        return
+    try:
+        with open(marker_path(path), "w", encoding="utf-8") as f:
+            f.write(expect + "\n")
+    except OSError:
+        pass
+
+
+# (path, size, mtime, expected hash) -> trusted. A same-size corrupt file is hashed once.
+_trust_cache = {}
+
+
+def file_trusted(path, expected_size, sha):
+    """Size match, then the catalog hash. A matching .sha256 marker skips re-reading the file."""
+    try:
+        st = os.stat(path) if os.path.isfile(path) else None
+    except OSError:
+        return False
+    if st is None:
+        return False
+    got = st.st_size
+    if not size_matches(got, expected_size):
+        return False
+    expect = (sha or "").strip().lower()
+    if not expect:
+        return True
+    mark = marker_path(path)
+    try:
+        if os.path.isfile(mark) and open(mark, encoding="utf-8").read().strip().lower() == expect:
+            return True
+    except OSError:
+        pass
+    key = (os.path.abspath(path), got, getattr(st, "st_mtime_ns", st.st_mtime), expect)
+    cached = _trust_cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        digest = sha256_file(path)
+    except OSError:
+        return False
+    if digest != expect:
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        _trust_cache[key] = False
+        return False
+    write_hash_marker(path, digest)
+    _trust_cache[key] = True
+    return True
+
+
 def is_installed(v, directory=None):
     directory = directory or VOICES
     files = v.get("files") or []
@@ -102,11 +169,7 @@ def is_installed(v, directory=None):
         return False
     for f in files:
         path = os.path.join(directory, f["filename"])
-        try:
-            got = os.path.getsize(path) if os.path.isfile(path) else 0
-        except OSError:
-            return False
-        if not size_matches(got, f.get("sizeBytes") or 0):
+        if not file_trusted(path, f.get("sizeBytes") or 0, f.get("sha256") or ""):
             return False
     return True
 
@@ -159,7 +222,11 @@ def delete_voice(voice_id, directory=None):
     directory = directory or VOICES
     os.makedirs(directory, exist_ok=True)
     for f in v["files"]:
-        for path in (os.path.join(directory, f["filename"]), os.path.join(directory, f["filename"] + ".partial")):
+        for path in (
+            os.path.join(directory, f["filename"]),
+            os.path.join(directory, f["filename"] + ".partial"),
+            marker_path(os.path.join(directory, f["filename"])),
+        ):
             if os.path.isfile(path):
                 os.remove(path)
     for fn in list(_after_delete):
@@ -177,6 +244,7 @@ class Downloads:
         self._listeners = []
         self._stop = False
         self._cancel = set()
+        self._again = set()
 
     def shutdown(self):
         """Drop queued downloads. An in-progress file stays a .partial and is not installed."""
@@ -185,14 +253,17 @@ class Downloads:
             self._queue.clear()
 
     def cancel(self, voice_id):
-        """Stop one download. Files written for this attempt are removed when the worker exits."""
+        """Stop one download. A queued voice is dropped. Only the active download is flagged."""
         with self._mu:
             queued = voice_id in self._queue
+            current = self._current == voice_id
             self._queue = [v for v in self._queue if v != voice_id]
-            self._cancel.add(voice_id)
-            if queued and self._current != voice_id:
+            self._again.discard(voice_id)
+            if current:
+                self._cancel.add(voice_id)
+            if queued or current:
                 self._status[voice_id] = {"state": "idle", "fraction": 0.0, "message": ""}
-        if queued:
+        if queued or current:
             self._emit(voice_id)
 
     def _cancelled(self, voice_id):
@@ -215,8 +286,12 @@ class Downloads:
         if self._stop or not by_id(voice_id):
             return False
         with self._mu:
-            st = self._status.get(voice_id) or {}
-            if st.get("state") == "downloading" or voice_id in self._queue or self._current == voice_id:
+            self._cancel.discard(voice_id)
+            if voice_id in self._queue:
+                return True
+            if self._current == voice_id:
+                # The worker may be cancelling. Ask it to start again when it exits.
+                self._again.add(voice_id)
                 return True
             self._queue.append(voice_id)
             self._status[voice_id] = {"state": "downloading", "fraction": 0.0, "message": "Waiting…"}
@@ -276,18 +351,30 @@ class Downloads:
             if not is_installed(v):
                 raise RuntimeError("download finished but voice files are missing")
             self._set(voice_id, state="done", fraction=1.0, message="Downloaded")
+            with self._mu:
+                self._again.discard(voice_id)
         except Exception as e:
             for path in written:
                 try:
                     os.remove(path)
                 except OSError:
                     pass
-            self._set(voice_id, state="error", message=f"Download failed: {e}")
+            if "cancelled" in str(e).lower():
+                self._set(voice_id, state="idle", fraction=0.0, message="")
+            else:
+                self._set(voice_id, state="error", message=f"Download failed: {e}")
         finally:
             with self._mu:
                 self._cancel.discard(voice_id)
+                again = voice_id in self._again and not self._stop
+                self._again.discard(voice_id)
                 if self._current == voice_id:
                     self._current = None
+                if again:
+                    self._queue.append(voice_id)
+                    self._status[voice_id] = {"state": "downloading", "fraction": 0.0, "message": "Waiting…"}
+            if again:
+                self._emit(voice_id)
             self._pump()
 
     def _download(self, url, dest, done, total, file_size, voice_id, sha=""):
@@ -318,6 +405,7 @@ class Downloads:
             if expect and digest.hexdigest() != expect:
                 raise RuntimeError(f"checksum mismatch for {os.path.basename(dest)}")
             os.replace(tmp, dest)
+            write_hash_marker(dest, expect or digest.hexdigest())
         except Exception:
             if os.path.isfile(tmp):
                 try:

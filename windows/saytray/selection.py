@@ -25,6 +25,15 @@ INPUT_KEYBOARD = 1
 _clip_lock = threading.Lock()
 _insert_lock = threading.Lock()
 _last_inserted = ""
+on_notice = None
+
+
+class InputIncomplete(Exception):
+    """Unicode typing stopped before the whole string. `sent` is UTF-16 units already typed."""
+
+    def __init__(self, sent, message):
+        super().__init__(message)
+        self.sent = int(sent or 0)
 
 
 def _user32():
@@ -51,12 +60,49 @@ def _modifiers_down():
 
 
 def _wait_mods_released(timeout=1.0):
+    """True when no modifier is down. timeout None waits until they are released."""
+    if timeout is None:
+        while _modifiers_down():
+            time.sleep(0.02)
+        return True
     t0 = time.time()
     while time.time() - t0 < timeout:
         if not _modifiers_down():
             return True
         time.sleep(0.02)
     return not _modifiers_down()
+
+
+def _notify(message):
+    logs.event("type: " + message)
+    if on_notice:
+        try:
+            on_notice(message)
+        except Exception:
+            pass
+
+
+def text_after_units(text, sent_units):
+    """The part of `text` that comes after `sent_units` UTF-16 code units. Newlines are not units."""
+    sent_units = int(sent_units or 0)
+    if sent_units <= 0:
+        return text or ""
+    count = 0
+    out = []
+    for ch in text or "":
+        if ch == "\r":
+            continue
+        if ch == "\n":
+            if count >= sent_units:
+                out.append(ch)
+            continue
+        units = len(ch.encode("utf-16-le")) // 2
+        if count >= sent_units:
+            out.append(ch)
+        elif count + units > sent_units:
+            out.append(ch)
+        count += units
+    return "".join(out)
 
 
 def _release_mods():
@@ -106,12 +152,19 @@ def split_typing_steps(events, batch=32):
 
 
 def _send_unicode(text):
+    """Type `text` as Unicode key events. Returns how many UTF-16 units were sent.
+
+    Enter waits until modifiers are up, then is sent. It is not dropped and it is
+    not sent as Ctrl+Enter. Raises InputIncomplete when a batch fails or Enter
+    cannot be sent yet; `sent` is the units already typed.
+    """
     user32 = _user32()
     if user32 is None:
-        raise OSError("unicode input is only available on Windows")
+        raise InputIncomplete(0, "unicode input is only available on Windows")
     events = unicode_events(text)
     if not events:
-        return
+        return 0
+    sent_units = 0
     ulong_ptr = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
 
     class KEYBDINPUT(ctypes.Structure):
@@ -156,16 +209,18 @@ def _send_unicode(text):
         arr = (INPUT * len(batch))(*batch)
         sent = user32.SendInput(len(batch), arr, ctypes.sizeof(INPUT))
         if sent != len(batch):
-            raise OSError(f"SendInput sent {sent} of {len(batch)}")
+            raise InputIncomplete(sent_units, f"SendInput sent {sent} of {len(batch)}")
         time.sleep(0.008)
 
     for kind, value in split_typing_steps(events):
         if kind == "enter":
-            # VK_RETURN while Ctrl is down is Ctrl+Enter, which sends the message
-            # in Slack, Teams, and Outlook. Wait until the hotkey is up.
-            if not _wait_mods_released(2.0):
-                logs.event("type: skipped Enter because a modifier was still held")
-                continue
+            # VK_RETURN while Ctrl is down is Ctrl+Enter. Hold the newline until
+            # the modifiers come up, then send a plain Enter in this same spot.
+            tries = 0
+            while not _wait_mods_released(None):
+                tries += 1
+                if tries >= 3:
+                    raise InputIncomplete(sent_units, "modifiers still held")
             send_batch([one(value, 0, 0), one(value, 0, KEYEVENTF_KEYUP)])
         else:
             batch = []
@@ -173,6 +228,8 @@ def _send_unicode(text):
                 batch.append(one(0, unit, KEYEVENTF_UNICODE))
                 batch.append(one(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))
             send_batch(batch)
+            sent_units += len(value)
+    return sent_units
 
 
 def read_selection():
@@ -273,20 +330,50 @@ def insert_dictation(text):
         logs.event(f"insert: {len(prepared)} chars leading-space={spaced} previous={source} {shown}")
 
 
+def _leave_on_clipboard(text):
+    """Copy `text` and do not paste. The previous clipboard value is not restored."""
+    if pyperclip is None:
+        raise OSError("clipboard unavailable")
+    pyperclip.copy(text)
+
+
 def type_text(text):
-    """Insert text at the cursor. Returns False when nothing was typed."""
+    """Insert text at the cursor. Returns False when the text was not fully typed.
+
+    A paste never runs while a modifier is held. If Unicode typing stops partway,
+    only the untyped remainder is pasted, and only after the modifiers are up.
+    If they stay down, that remainder is left on the clipboard and this returns False.
+    """
     if not text:
         return False
+    sent = 0
     if _modifiers_down():
         logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
         try:
-            _send_unicode(text)
+            sent = _send_unicode(text) or 0
             return True
+        except InputIncomplete as e:
+            sent = e.sent
+            logs.event(f"type: unicode stopped after {sent} units: {e}")
         except Exception as e:
-            logs.event(f"type: unicode input failed: {e!r}; falling back to paste")
+            sent = int(getattr(e, "sent", 0) or 0)
+            logs.event(f"type: unicode input failed: {e!r}; will paste the rest after the shortcut is released")
+    remainder = text_after_units(text, sent)
+    if not remainder:
+        return sent > 0
+    if _modifiers_down():
+        logs.event("type: waiting for the shortcut to be released before pasting")
+        if not _wait_mods_released(2.0):
+            try:
+                _leave_on_clipboard(remainder)
+            except Exception as e:
+                logs.event(f"type: could not leave text on the clipboard: {e!r}")
+                return False
+            _notify("The shortcut was still held, so SayTray did not paste. The rest of the dictation is on the clipboard.")
+            return False
     try:
         with _clip_lock:
-            _paste_text(text)
+            _paste_text(remainder)
         return True
     except Exception as e:
         logs.event(f"type: paste failed: {e!r}")

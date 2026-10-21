@@ -59,20 +59,19 @@ def coerce_bool(value, default):
     return default
 
 
-def hotkey_ok(value):
-    """True when `value` is a shortcut SayTray can register."""
+def _hotkey_parts(value):
     if not isinstance(value, str):
-        return False
+        return None
     raw = value.strip()
     if not raw or raw.lower() in ("press keys…", "press keys..."):
-        return False
-    try:
-        import keyboard
-        keyboard.parse_hotkey(raw)
-        return True
-    except ImportError:
-        pass
-    except Exception:
+        return None
+    return raw
+
+
+def hotkey_structure_ok(value):
+    """True when the shortcut is shaped like one SayTray can store."""
+    raw = _hotkey_parts(value)
+    if raw is None:
         return False
     parts = [p.strip() for p in raw.split("+")]
     if not parts or any(not p for p in parts) or len(parts) > 5:
@@ -86,6 +85,41 @@ def hotkey_ok(value):
         if mod.lower() not in _MODS:
             return False
     return True
+
+
+def hotkey_ok(value):
+    """True when the shortcut should be kept in settings.
+
+    A layout that cannot type the key today still keeps the saved shortcut.
+    Registration skips it and tells the user, instead of replacing it.
+    """
+    if hotkey_structure_ok(value):
+        return True
+    raw = _hotkey_parts(value)
+    if raw is None:
+        return False
+    try:
+        import keyboard
+        keyboard.parse_hotkey(raw)
+        return True
+    except Exception:
+        return False
+
+
+def hotkey_registerable(value):
+    """False when the installed keyboard hook rejects this shortcut on the current layout."""
+    raw = _hotkey_parts(value)
+    if not raw:
+        return False
+    try:
+        import keyboard
+    except ImportError:
+        return hotkey_structure_ok(value)
+    try:
+        keyboard.parse_hotkey(raw)
+        return True
+    except Exception:
+        return False
 
 
 def coerce_hotkey(value, default):
@@ -149,40 +183,48 @@ def installed_voices():
     return installed_ids()
 
 
+def read_settings(path):
+    """Return (data, should_write).
+
+    A missing file is {}. JSON that does not parse, or JSON that is not an object,
+    is moved to .bad and replaced with {}. A permission or sharing error leaves the
+    file where it is and returns in-memory defaults without writing.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = json.load(f)
+    except FileNotFoundError:
+        return {}, True
+    except json.JSONDecodeError:
+        try:
+            backup_unreadable(path)
+        except OSError:
+            pass
+        return {}, True
+    except OSError:
+        return {}, False
+    if not isinstance(loaded, dict):
+        try:
+            backup_unreadable(path)
+        except OSError:
+            pass
+        return {}, True
+    return loaded, True
+
+
 class Settings:
     def __init__(self):
         self._lock = threading.Lock()
-        raw = None
-        parsed = False
-        try:
-            with open(PATH, encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                raw = loaded
-                parsed = True
-            else:
-                parsed = False
-        except FileNotFoundError:
-            raw = {}
-            parsed = True
-        except Exception:
-            raw = None
-            parsed = False
-        if not parsed:
-            try:
-                backup_unreadable(PATH)
-            except Exception:
-                pass
-            raw = {}
+        raw, should_write = read_settings(PATH)
         self.data = sanitize(raw or {})
         voice = resolve_saved_voice(self.data.get("voice") or "")
         if voice != self.data.get("voice"):
             self.data["voice"] = voice
         self.listeners = []
-        if parsed:
+        if should_write:
             dirty = any(self.data.get(k) != (raw or {}).get(k) for k in self.data)
         else:
-            dirty = True
+            dirty = False
         if dirty:
             try:
                 self._write()

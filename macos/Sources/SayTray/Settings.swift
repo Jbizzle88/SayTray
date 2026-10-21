@@ -229,6 +229,7 @@ struct SettingsView: View {
           }
         } else if let msg = library.message[v.id], msg.hasPrefix("Downloading") || msg.hasPrefix("Starting") {
           Text(msg).font(.caption).foregroundStyle(.secondary)
+          Button("Cancel") { library.cancel(v.id) }.controlSize(.small)
         } else {
           Button("Download \(v.sizeLabel)") { library.download(v.id) }.controlSize(.small)
         }

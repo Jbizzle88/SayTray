@@ -11,12 +11,19 @@ public enum DictationSpacing {
     apply(text.trimmingCharacters(in: .whitespacesAndNewlines), previous: previous)
   }
 
-  /// Quotes, brackets, and $ at the start of a phrase get a space. Commas and periods do not.
-  private static let opening: Set<Character> = ["\"", "'", "“", "‘", "«", "(", "[", "{", "$"]
+  /// Brackets and $ at the start of a phrase get a space. Commas, periods, and these symbols do not.
+  private static let opening: Set<Character> = ["“", "‘", "«", "(", "[", "{", "$"]
+  private static let attachedSymbols: Set<Character> = ["+", "<", "=", ">", "^", "|", "~", "`"]
 
   public static func apply(_ text: String, previous: Character?) -> String {
     guard let first = text.first else { return text }
-    if first.isWhitespace || (isPunctuation(first) && !opening.contains(first)) { return text }
+    if first.isWhitespace || attachedSymbols.contains(first) { return text }
+    if first == "\"" || first == "'" {
+      let next = text.dropFirst().first
+      if next == nil || next!.isWhitespace { return text }
+    } else if isPunctuation(first) && !opening.contains(first) {
+      return text
+    }
     guard let previous else { return text }
     if previous.isWhitespace { return text }
     return " " + text

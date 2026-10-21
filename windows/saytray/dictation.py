@@ -18,7 +18,9 @@ SR = 16000
 _PRE_ROLL_S = 0.45
 _MIN_LIVE_S = 0.15
 _GRACE_S = 0.25          # keep capturing briefly after key-up so the last word is not lost
-_IDLE_MIC_S = 20.0       # release the input after this so a headset is not stuck in hands-free mode
+_IDLE_MIC_WIRED_S = 600.0    # built-in and wired inputs stay warm so the next hold has a pre-roll
+_IDLE_MIC_HANDSFREE_S = 20.0 # Bluetooth / hands-free is released quickly so headphone audio stays usable
+_SILENCE_RMS = 0.001
 
 
 def keep_whisper_segment(text, no_speech_prob, avg_logprob):
@@ -40,12 +42,24 @@ def keep_whisper_segment(text, no_speech_prob, avg_logprob):
     return True
 
 
+def input_releases_quickly(name):
+    """Bluetooth and hands-free inputs degrade headphone audio while the mic is open."""
+    n = (name or "").lower()
+    return any(mark in n for mark in ("bluetooth", "hands-free", "hands free", "airpod", " ag audio", "hfp", "hsp"))
+
+
+def idle_seconds_for_input(name):
+    if input_releases_quickly(name):
+        return _IDLE_MIC_HANDSFREE_S
+    return _IDLE_MIC_WIRED_S
+
+
 def slice_is_silent(samples, sample_rate):
-    """Near-digital silence. Real speech sits well above this."""
+    """Near-digital silence. A quiet mic still sits above this; Whisper's own filter does the rest."""
     if samples is None or len(samples) == 0:
         return True
     rms = float(np.sqrt(np.mean(np.square(np.asarray(samples, dtype=np.float32)))))
-    return rms < 0.003
+    return rms < _SILENCE_RMS
 
 
 class Dictation:
@@ -72,6 +86,7 @@ class Dictation:
         self._idle_token = None
         self.on_notice = None
         self._model_error = None
+        self._input_name = ""
         threading.Thread(target=self._load_model, daemon=True, name="whisper-load").start()
         threading.Thread(target=self._open_warm, daemon=True, name="dictation-warm").start()
 
@@ -113,6 +128,12 @@ class Dictation:
                     return False
             import sounddevice as sd
             try:
+                dev = sd.query_devices(kind="input")
+                name = (dev or {}).get("name") or ""
+            except Exception:
+                name = ""
+            self._input_name = name
+            try:
                 stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", callback=self._cb)
                 stream.start()
             except Exception as e:
@@ -131,8 +152,32 @@ class Dictation:
                     old.stop(); old.close()
                 except Exception:
                     pass
-            logs.event("dictation: pre-roll microphone running")
+            kind = "hands-free" if input_releases_quickly(name) else "wired"
+            logs.event(
+                f"dictation: pre-roll microphone running input={name or 'unknown'!r} "
+                f"kind={kind} idle={idle_seconds_for_input(name):.0f}s"
+            )
             return True
+
+    def warm(self):
+        """Open the input when the dictate modifiers go down, before the main key.
+
+        A pending idle release is cancelled and the idle clock starts again, so the
+        lead-in is still there when the main key follows.
+        """
+        if self._closed:
+            return False
+        with self._lock:
+            self._idle_token = None
+            running = self._stream_ok()
+        opened = False
+        if not running:
+            opened = bool(self._open_warm())
+        if opened or running:
+            self._arm_mic_idle()
+        if opened:
+            logs.event("dictation: pre-roll re-warmed on modifier")
+        return opened
 
     def start(self):
         pressed = time.monotonic()
@@ -190,7 +235,11 @@ class Dictation:
         if just_opened:
             logs.event("dictation: microphone was just opened before the chime")
         label = {True: "played", False: "FAILED"}.get(chime_ok, "off")
-        logs.event(f"dictation: capture gen {gen} chime={label} pre-roll {pre_s * 1000:.0f}ms")
+        kind = "hands-free" if input_releases_quickly(self._input_name) else "wired"
+        logs.event(
+            f"dictation: capture gen {gen} chime={label} pre-roll {pre_s * 1000:.0f}ms "
+            f"input={self._input_name or 'unknown'!r} kind={kind}"
+        )
         self._state()
 
     def stop(self):
@@ -241,8 +290,12 @@ class Dictation:
 
     def _arm_mic_idle(self):
         token = time.monotonic()
+        name = self._input_name
+        seconds = idle_seconds_for_input(name)
         self._idle_token = token
-        timer = threading.Timer(_IDLE_MIC_S, self._close_if_idle, args=(token,))
+        kind = "hands-free" if input_releases_quickly(name) else "wired"
+        logs.event(f"dictation: mic stays open for {seconds:.0f}s ({kind}, {name or 'unknown input'})")
+        timer = threading.Timer(seconds, self._close_if_idle, args=(token,))
         timer.daemon = True
         timer.start()
 
@@ -253,13 +306,15 @@ class Dictation:
             stream = self._stream
             self._stream = None
             self._ring.clear()
+            name = self._input_name
         if stream is not None:
             try:
                 stream.stop()
                 stream.close()
             except Exception:
                 pass
-            logs.event("dictation: microphone released after idle")
+            kind = "hands-free" if input_releases_quickly(name) else "wired"
+            logs.event(f"dictation: microphone released after idle ({kind})")
 
     def _notify(self, message):
         logs.event("dictation: " + message)
@@ -333,10 +388,16 @@ class Dictation:
         logs.event(f"dictation: kept {dur:.2f}s with no duration cap; {n_slices} slices of <={SEGMENT_S:.0f}s")
         t0 = time.time()
 
+        silent_slices = 0
+        heard_slices = 0
+
         def transcribe_audio(samples):
+            nonlocal silent_slices, heard_slices
             if slice_is_silent(samples, SR):
+                silent_slices += 1
                 logs.event(f"dictation: slice {len(samples) / SR:.1f}s skipped (silence)")
                 return "", None, None, False
+            heard_slices += 1
             try:
                 # vad off and no conditioning on a previous window: both can drop or
                 # rewrite the front of a long clip. Each slice stands on its own.
@@ -379,6 +440,8 @@ class Dictation:
                     return
             if text:
                 insert_dictation(text)
+            elif silent_slices and not heard_slices:
+                self._notify("SayTray didn't hear anything. If you were speaking, check the microphone and try again.")
 
     def _state(self):
         if self.on_state:
