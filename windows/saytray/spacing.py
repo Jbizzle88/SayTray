@@ -1,15 +1,17 @@
-"""Join dictated text to the cursor, and concatenate recognizer segments.
+"""Join dictated text to the cursor, and concatenate recognizer slices.
 
-Same rules as macOS DictationSpacing: one leading space between back-to-back
-phrases, never a double space, never a space after a newline or at the start
-of an empty field, and a later segment must not erase the beginning.
+Same rules as macOS DictationSpacing. One leading space between phrases, never a
+double space, never a space after a newline or at the start of an empty field.
+Independent slices are concatenated. A shared prefix does not drop either side.
+Opening quotes, parentheses, and $ get a space. Commas and periods stay attached.
 """
 
-_PUNCT = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~") | set("“”‘’…—–")
+# Attached punctuation does not get a leading space. Opening quotes, brackets, and $ do.
+_ATTACHED = set("!#%&)*+,-./:;<=>?@\\]^_`|}~") | set("”’…—–")
 
 
-def _punct(ch):
-    return ch in _PUNCT
+def _attached(ch):
+    return ch in _ATTACHED
 
 
 def prepare(text, previous):
@@ -22,7 +24,7 @@ def apply(text, previous):
     if not text:
         return text
     first = text[0]
-    if first.isspace() or _punct(first):
+    if first.isspace() or _attached(first):
         return text
     if previous is None or (isinstance(previous, str) and (not previous or previous[-1].isspace())):
         return text
@@ -33,15 +35,12 @@ def apply(text, previous):
 
 
 def merge(previous, incoming):
+    """Join two independent slices. Nothing is dropped because one starts with the other."""
     a = (previous or "").strip()
     b = (incoming or "").strip()
     if not a:
         return b
     if not b:
-        return a
-    if b.startswith(a):
-        return b
-    if a.startswith(b):
         return a
     return a + apply(b, a[-1])
 

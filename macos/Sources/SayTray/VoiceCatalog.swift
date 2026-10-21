@@ -1,10 +1,12 @@
 import Foundation
 import Combine
+import CommonCrypto
 
 struct VoiceFile: Codable, Equatable {
   var filename: String
   var url: String
   var sizeBytes: Int
+  var sha256: String?
 }
 
 struct VoiceSpeaker: Codable, Equatable, Identifiable {
@@ -80,6 +82,24 @@ enum VoiceCatalog {
     }
   }
 
+  /// Streaming SHA-256 of a downloaded file. Compared at download time.
+  static func sha256Hex(_ url: URL) -> String? {
+    guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    defer { try? handle.close() }
+    var ctx = CC_SHA256_CTX()
+    CC_SHA256_Init(&ctx)
+    while true {
+      let data = handle.readData(ofLength: 64 * 1024)
+      if data.isEmpty { break }
+      data.withUnsafeBytes { raw in
+        _ = CC_SHA256_Update(&ctx, raw.baseAddress, CC_LONG(data.count))
+      }
+    }
+    var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+    CC_SHA256_Final(&digest, &ctx)
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
   /// Exact catalog size. A short or corrupt download is not a voice.
   static func fileMatches(_ url: URL, expected: Int) -> Bool {
     let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -111,7 +131,7 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
 
   private var session: URLSession!
   private let lock = NSLock()
-  private struct Job { var voice: CatalogVoice; var index: Int; var bytesBefore: Int64 }
+  private struct Job { var voice: CatalogVoice; var index: Int; var bytesBefore: Int64; var wrote: [String] }
   private var jobs: [String: Job] = [:]
   private var taskVoice: [Int: String] = [:]
 
@@ -131,7 +151,7 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
     lock.lock()
     if jobs[id] != nil { lock.unlock(); return }
     guard let voice = VoiceCatalog.voice(id) else { lock.unlock(); return }
-    jobs[id] = Job(voice: voice, index: 0, bytesBefore: 0)
+    jobs[id] = Job(voice: voice, index: 0, bytesBefore: 0, wrote: [])
     lock.unlock()
     DispatchQueue.main.async {
       self.fraction[id] = 0
@@ -151,6 +171,10 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
   }
 
   func delete(_ id: String) {
+    if id == VoiceCatalog.defaultVoiceID {
+      DispatchQueue.main.async { self.message[id] = "Norman stays installed. It is the default voice." }
+      return
+    }
     lock.lock()
     let busy = jobs[id] != nil
     lock.unlock()
@@ -191,11 +215,17 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
 
   private func fail(_ id: String, _ text: String) {
     lock.lock()
+    let wrote = jobs[id]?.wrote ?? []
     jobs[id] = nil
     lock.unlock()
+    let dir = VoiceCatalog.voicesDirectory()
+    for name in wrote {
+      try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+    }
     DispatchQueue.main.async {
       self.fraction[id] = nil
       self.message[id] = text
+      self.refresh()
     }
   }
 
@@ -235,6 +265,14 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
       fail(id, "Download incomplete: \(file.filename) (\(detail))")
       return
     }
+    if let expect = file.sha256?.lowercased(), !expect.isEmpty {
+      let hashed = VoiceCatalog.sha256Hex(location)
+      if hashed != expect {
+        try? FileManager.default.removeItem(at: location)
+        fail(id, "Download checksum mismatch: \(file.filename)")
+        return
+      }
+    }
     let dir = VoiceCatalog.voicesDirectory()
     let dest = dir.appendingPathComponent(file.filename)
     do {
@@ -250,10 +288,11 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
       fail(id, "Could not save \(file.filename)")
       return
     }
+    let wrote = job.wrote + [file.filename]
     let next = job.index + 1
     if next < job.voice.files.count {
       lock.lock()
-      jobs[id] = Job(voice: job.voice, index: next, bytesBefore: job.bytesBefore + Int64(file.sizeBytes))
+      jobs[id] = Job(voice: job.voice, index: next, bytesBefore: job.bytesBefore + Int64(file.sizeBytes), wrote: wrote)
       lock.unlock()
       startFile(id)
       return

@@ -5,9 +5,33 @@ held and tapping Space starts a fresh dictation each time. add_hotkey is only us
 the chord (its own callback is not the state machine — that machine sticks the non-modifier
 key when the modifiers never come up).
 """
-import keyboard
+import queue, threading
 from . import logs
 from .chord import ChordTracker
+
+
+class HotkeySerial:
+    """Run dictate down/up on one thread, in the order the keys arrived.
+
+    A quick tap used to start and stop on two threads, so stop could run first
+    and the microphone stayed on.
+    """
+
+    def __init__(self):
+        self._q = queue.Queue()
+        self._t = threading.Thread(target=self._run, daemon=True, name="hotkey-serial")
+        self._t.start()
+
+    def submit(self, fn):
+        self._q.put(fn)
+
+    def _run(self):
+        while True:
+            fn = self._q.get()
+            try:
+                fn()
+            except Exception as e:
+                logs.event(f"hotkey handler failed: {e!r}")
 
 
 class Hotkeys:
@@ -19,6 +43,7 @@ class Hotkeys:
         self._on_up = None
 
     def register(self, read_combo, on_read, dictate_combo, on_down, on_up):
+        import keyboard
         self.clear()
         try:
             self._handles.append(keyboard.add_hotkey(read_combo, on_read, suppress=True))
@@ -39,6 +64,7 @@ class Hotkeys:
         tracker = self._tracker
         if tracker is None:
             return
+        import keyboard
         action = tracker.event(e.name, e.event_type == keyboard.KEY_DOWN)
         if action == "down" and self._on_down:
             self._on_down()
@@ -46,6 +72,7 @@ class Hotkeys:
             self._on_up()
 
     def clear(self):
+        import keyboard
         for h in self._handles:
             try:
                 keyboard.remove_hotkey(h)

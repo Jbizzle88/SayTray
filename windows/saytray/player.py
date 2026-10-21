@@ -7,6 +7,13 @@ import os, threading, wave, time, queue, collections
 import numpy as np
 from . import logs, sapi
 
+def markers_after_callback(pending, finished_speech, speech_left):
+    """A finished chime is not speech. Idle only when no speech is still buffered."""
+    pending = max(0, pending - finished_speech)
+    idle = finished_speech > 0 and pending == 0 and not speech_left
+    return pending, idle
+
+
 def queue_chime(buf, chimes, arr, gen):
     """Put the preloaded chime at the front, rewound to the first sample.
 
@@ -173,11 +180,12 @@ class Player:
                 pos += take
                 if pos >= len(arr):
                     self._buf.popleft()
-                    finished += 1
+                    if not self._is_chime(arr):
+                        finished += 1
                 else:
                     self._buf[0] = (gen, arr, pos)
-            self._pending_markers = max(0, self._pending_markers - finished)
-            idle_now = finished and self._pending_markers == 0
+            speech_left = any(not self._is_chime(item[1]) for item in self._buf)
+            self._pending_markers, idle_now = markers_after_callback(self._pending_markers, finished, speech_left)
         out[filled:] = 0
         if idle_now and self.on_idle and self._items.empty() and not self._preparing:
             threading.Thread(target=self.on_idle, daemon=True).start()
@@ -211,7 +219,7 @@ class Player:
                     self._log("PLAY " + os.path.basename(path))
                 else:
                     path = os.path.join(os.path.dirname(self.play_log or logs.LAST), f"sapi-{time.time_ns()}.wav")
-                    self._log("PLAY system: " + val)
+                    self._log(f"PLAY system: {len(val)} chars")
                     sapi.render(val, path, self.settings["sapi_voice"])
                 a, sr = _load(path)
                 with self._buf_lock:

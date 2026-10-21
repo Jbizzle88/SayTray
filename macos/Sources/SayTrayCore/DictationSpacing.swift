@@ -11,23 +11,23 @@ public enum DictationSpacing {
     apply(text.trimmingCharacters(in: .whitespacesAndNewlines), previous: previous)
   }
 
+  /// Quotes, brackets, and $ at the start of a phrase get a space. Commas and periods do not.
+  private static let opening: Set<Character> = ["\"", "'", "“", "‘", "«", "(", "[", "{", "$"]
+
   public static func apply(_ text: String, previous: Character?) -> String {
     guard let first = text.first else { return text }
-    if first.isWhitespace || isPunctuation(first) { return text }
+    if first.isWhitespace || (isPunctuation(first) && !opening.contains(first)) { return text }
     guard let previous else { return text }
     if previous.isWhitespace { return text }
     return " " + text
   }
 
-  /// Keep a growing transcript. If the recognizer restarts and sends only the
-  /// latest segment, append it instead of dropping what came before.
+  /// Join two independent slices with spacing. A shared prefix does not drop either side.
   public static func merge(_ previous: String, _ incoming: String) -> String {
     let a = previous.trimmingCharacters(in: .whitespacesAndNewlines)
     let b = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
     if a.isEmpty { return b }
     if b.isEmpty { return a }
-    if b.hasPrefix(a) { return b }
-    if a.hasPrefix(b) { return a }
     return a + apply(b, previous: a.last)
   }
 

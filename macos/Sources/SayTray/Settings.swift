@@ -224,7 +224,9 @@ struct SettingsView: View {
           } else {
             Button("Use") { st.piperVoice = v.id }.controlSize(.small)
           }
-          Button("Delete") { deleteID = v.id }.controlSize(.small)
+          if v.id != VoiceCatalog.defaultVoiceID {
+            Button("Delete") { deleteID = v.id }.controlSize(.small)
+          }
         } else if let msg = library.message[v.id], msg.hasPrefix("Downloading") || msg.hasPrefix("Starting") {
           Text(msg).font(.caption).foregroundStyle(.secondary)
         } else {

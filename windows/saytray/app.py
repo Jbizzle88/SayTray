@@ -6,7 +6,7 @@ import pystray
 from .config import Settings
 from .speaker import Speaker
 from .dictation import Dictation
-from .hotkeys import Hotkeys
+from .hotkeys import HotkeySerial, Hotkeys
 from .selection import read_selection
 from .voices import (default_voice, downloads, format_size, installed_ids, normalize_speaker,
                      on_after_delete, on_before_delete, pretty_voice, remove_retired_voices, voice_size, voices)
@@ -72,6 +72,8 @@ class App:
         self.speaker = Speaker(self.settings)
         self.dictation = Dictation(player=self.speaker.player, settings=self.settings)
         self.hotkeys = Hotkeys()
+        self._keys = HotkeySerial()
+        self.dictation.on_notice = self._notice
         self.speaker.on_state = self._update_icon
         self.dictation.on_state = self._update_icon
         on_before_delete(self._before_delete_voice)
@@ -92,8 +94,8 @@ class App:
 
     def _register(self):
         self.hotkeys.register(self.settings["read_hotkey"], self.read, self.settings["dictate_hotkey"],
-                              lambda: threading.Thread(target=self.dictation.start, daemon=True).start(),
-                              lambda: threading.Thread(target=self.dictation.stop, daemon=True).start())
+                              lambda: self._keys.submit(self.dictation.start),
+                              lambda: self._keys.submit(self.dictation.stop))
 
     def _saved(self):
         self._register()
@@ -209,6 +211,13 @@ class App:
             except Exception:
                 pass
         threading.Thread(target=show, daemon=True).start()
+    def _notice(self, message):
+        logs.event("notice: " + message)
+        try:
+            self.icon.notify(message, "SayTray")
+        except Exception:
+            pass
+
     def _quit(self, icon=None, item=None):
         logs.event("quit")
         self.hotkeys.clear()
@@ -247,7 +256,8 @@ class App:
         self.speaker.warm_up()
         if self.settings["start_with_windows"] and not startup.enabled():
             startup.set_enabled(True)
-        threading.Thread(target=self._debug_watch, daemon=True).start()
+        if os.environ.get("SAYTRAY_DEBUG") == "1":
+            threading.Thread(target=self._debug_watch, daemon=True).start()
         logs.event(f"launched; voice={self.settings['voice']} speed={self.settings['speed']} pid={os.getpid()}")
         self.icon.run()
 

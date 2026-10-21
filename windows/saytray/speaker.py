@@ -52,10 +52,11 @@ class Speaker:
             d = logs.LAST
             shutil.rmtree(d, ignore_errors=True)
             os.makedirs(d, exist_ok=True)
-            scal = "".join(c if 32 <= ord(c) < 127 else f"<U+{ord(c):04X}>" for c in text)
             with open(os.path.join(d, "input.txt"), "w", encoding="utf-8") as f:
-                f.write(f"READ {self._read} VOICE {self.settings['voice']} SPEED {self.settings['speed']}\n--- RAW ---\n{text}\n"
-                        f"--- SCALARS ---\n{scal}\n--- CHUNKS ---\n" + "\n".join(f"{i + 1:03d}: {c}" for i, c in enumerate(cs)) + "\n")
+                f.write(
+                    f"READ {self._read} VOICE {self.settings['voice']} SPEED {self.settings['speed']} "
+                    f"CHARS {len(text)} CHUNKS {len(cs)}\n"
+                )
             self.player.play_log = os.path.join(d, "play.log")
             self._gen = self.player.new_generation()
             use_piper = self._prepare()

@@ -2,7 +2,7 @@
 
 `voices.json` next to this file is the catalog. install.ps1 reads the same file.
 """
-import json, os, threading, urllib.request
+import hashlib, json, os, threading, urllib.request
 from .logs import VOICES
 
 _PATH = os.path.join(os.path.dirname(__file__), "voices.json")
@@ -149,6 +149,8 @@ def delete_voice(voice_id, directory=None):
     v = by_id(voice_id)
     if not v:
         raise ValueError("unknown voice")
+    if voice_id == default_voice():
+        raise ValueError("Norman is the default voice and cannot be deleted.")
     st = downloads.status(voice_id)
     if st.get("state") == "downloading":
         raise RuntimeError("Wait for the download to finish before deleting this voice.")
@@ -174,12 +176,28 @@ class Downloads:
         self._current = None
         self._listeners = []
         self._stop = False
+        self._cancel = set()
 
     def shutdown(self):
         """Drop queued downloads. An in-progress file stays a .partial and is not installed."""
         with self._mu:
             self._stop = True
             self._queue.clear()
+
+    def cancel(self, voice_id):
+        """Stop one download. Files written for this attempt are removed when the worker exits."""
+        with self._mu:
+            queued = voice_id in self._queue
+            self._queue = [v for v in self._queue if v != voice_id]
+            self._cancel.add(voice_id)
+            if queued and self._current != voice_id:
+                self._status[voice_id] = {"state": "idle", "fraction": 0.0, "message": ""}
+        if queued:
+            self._emit(voice_id)
+
+    def _cancelled(self, voice_id):
+        with self._mu:
+            return self._stop or voice_id in self._cancel
 
     def add_listener(self, fn):
         with self._mu:
@@ -239,46 +257,66 @@ class Downloads:
 
     def _run(self, voice_id):
         v = by_id(voice_id)
+        written = []
         try:
             files = v["files"]
             total = voice_size(v) or 1
             done = 0
             os.makedirs(VOICES, exist_ok=True)
             for f in files:
+                if self._cancelled(voice_id):
+                    raise RuntimeError("download cancelled")
                 dest = os.path.join(VOICES, f["filename"])
-                self._download(f["url"], dest, done, total, int(f.get("sizeBytes") or 0), voice_id)
+                self._download(
+                    f["url"], dest, done, total, int(f.get("sizeBytes") or 0), voice_id,
+                    sha=f.get("sha256") or "",
+                )
+                written.append(dest)
                 done += int(f.get("sizeBytes") or 0)
             if not is_installed(v):
                 raise RuntimeError("download finished but voice files are missing")
             self._set(voice_id, state="done", fraction=1.0, message="Downloaded")
         except Exception as e:
+            for path in written:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             self._set(voice_id, state="error", message=f"Download failed: {e}")
         finally:
             with self._mu:
+                self._cancel.discard(voice_id)
                 if self._current == voice_id:
                     self._current = None
             self._pump()
 
-    def _download(self, url, dest, done, total, file_size, voice_id):
+    def _download(self, url, dest, done, total, file_size, voice_id, sha=""):
         tmp = dest + ".partial"
         req = urllib.request.Request(url, headers={"User-Agent": "SayTray"})
+        digest = hashlib.sha256()
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 got = 0
                 with open(tmp, "wb") as out:
                     while True:
+                        if self._cancelled(voice_id):
+                            raise RuntimeError("download cancelled")
                         chunk = resp.read(64 * 1024)
                         if not chunk:
                             break
                         out.write(chunk)
+                        digest.update(chunk)
                         got += len(chunk)
                         counted = min(got, file_size) if file_size else got
                         frac = min(0.99, (done + counted) / float(total or 1))
                         self._set(voice_id, state="downloading", fraction=frac, message=f"Downloading… {int(frac * 100)}%")
-            if self._stop:
+            if self._cancelled(voice_id):
                 raise RuntimeError("download cancelled")
             if not size_matches(got, file_size):
                 raise RuntimeError(f"incomplete download ({got} of {file_size} bytes)")
+            expect = (sha or "").strip().lower()
+            if expect and digest.hexdigest() != expect:
+                raise RuntimeError(f"checksum mismatch for {os.path.basename(dest)}")
             os.replace(tmp, dest)
         except Exception:
             if os.path.isfile(tmp):

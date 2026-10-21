@@ -44,10 +44,15 @@ check(DictationSpacing.apply("there", previous: "\n") == "there", "no space afte
 check(DictationSpacing.apply("there", previous: "o") == " there", "space after a word")
 check(DictationSpacing.apply(" there", previous: "o") == " there", "text already spaced")
 check(DictationSpacing.apply(", and", previous: "o") == ", and", "punctuation is not spaced")
-check(DictationSpacing.apply("(note)", previous: "o") == "(note)", "opening punct is not spaced")
+check(DictationSpacing.apply("(note)", previous: "o") == " (note)", "opening parenthesis is spaced")
+check(DictationSpacing.apply("\"Stop.\"", previous: "o") == " \"Stop.\"", "opening quote is spaced")
+check(DictationSpacing.apply("$5", previous: "o") == " $5", "dollar amount is spaced")
 check(DictationSpacing.merge("hello there", "friend") == "hello there friend", "segment append")
-check(DictationSpacing.merge("hello world", "hello world and more") == "hello world and more", "partial grew")
-check(DictationSpacing.merge("hello world", "hello") == "hello world", "shorter partial kept")
+check(DictationSpacing.merge("hello world", "hello world and more") == "hello world hello world and more", "shared prefix is kept")
+check(DictationSpacing.merge("hello world", "hello") == "hello world hello", "shorter slice is kept")
+check(DictationSpacing.merge("I", "It is raining.") == "I It is raining.", "prefix slice is not dropped")
+check(DictationSpacing.merge("Yes", "Yes, I agree.") == "Yes Yes, I agree.", "yes is not swallowed")
+check(DictationSpacing.merge("Thank you.", "Thank you.") == "Thank you. Thank you.", "repeated sentence is kept twice")
 check(DictationSpacing.join(["the start of the sentence", "only the end"]) == "the start of the sentence only the end", "long dictation keeps the start")
 func spaced(_ parts: [String]) -> String {
   var typed = ""

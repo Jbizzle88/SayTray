@@ -68,7 +68,7 @@ final class ReadSession {
 
   private func trigger(_ s: Slot, _ msg: String) {
     s.events.append(msg)
-    Log.guardTrigger("read \(id) chunk \(s.key): \(msg) | \(s.text)")
+    Log.guardTrigger("read \(id) chunk \(s.key): \(msg) (\(s.text.count) chars)")
     Log.append("GUARD chunk \(s.key): \(msg)", to: dir.appendingPathComponent("play.log"))
   }
 

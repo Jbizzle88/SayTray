@@ -7,14 +7,9 @@
 - Speed control, voice picker, hotkey rebinding, launch at login/startup, dictation chimes
 - No account, no cloud (after a one-time voice download)
 
-**Current release:** [v1.0.0](https://github.com/Jbizzle88/SayTray/releases/tag/v1.0.0)
+**Current source version:** 1.1.0
 
-## Download
-
-| Platform | Package |
-|----------|---------|
-| **macOS** 14+ | [SayTray-1.0.0-macOS.zip](https://github.com/Jbizzle88/SayTray/releases/download/v1.0.0/SayTray-1.0.0-macOS.zip) |
-| **Windows** 10/11 | [SayTray-1.0.0-Windows.zip](https://github.com/Jbizzle88/SayTray/releases/download/v1.0.0/SayTray-1.0.0-Windows.zip) |
+Build from source with the macOS and Windows READMEs. The v1.0.0 zip files on the GitHub release install an older voice set (including voices this build no longer ships) and are not the install for this version. A 1.1.0 package is published from `package_release.sh` / `package_release.ps1` when a release is cut.
 
 All releases: https://github.com/Jbizzle88/SayTray/releases
 

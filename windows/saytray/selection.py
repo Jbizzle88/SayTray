@@ -50,6 +50,15 @@ def _modifiers_down():
         return False
 
 
+def _wait_mods_released(timeout=1.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if not _modifiers_down():
+            return True
+        time.sleep(0.02)
+    return not _modifiers_down()
+
+
 def _release_mods():
     if keyboard is None:
         return
@@ -74,6 +83,26 @@ def unicode_events(text):
         for i in range(0, len(encoded), 2):
             events.append(("u", int.from_bytes(encoded[i:i + 2], "little")))
     return events
+
+
+def split_typing_steps(events, batch=32):
+    """Keep Enter as its own step so it can wait until modifiers are up."""
+    steps = []
+    chars = []
+    for kind, value in events:
+        if kind == "vk":
+            if chars:
+                steps.append(("chars", chars))
+                chars = []
+            steps.append(("enter", value))
+        else:
+            chars.append(value)
+            if len(chars) >= batch:
+                steps.append(("chars", chars))
+                chars = []
+    if chars:
+        steps.append(("chars", chars))
+    return steps
 
 
 def _send_unicode(text):
@@ -121,19 +150,29 @@ def _send_unicode(text):
     def one(vk, scan, flags):
         return INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(vk, scan, flags, 0, 0))
 
-    for start in range(0, len(events), 32):
-        batch = []
-        for kind, value in events[start:start + 32]:
-            if kind == "vk":
-                batch.append(one(value, 0, 0))
-                batch.append(one(value, 0, KEYEVENTF_KEYUP))
-            else:
-                batch.append(one(0, value, KEYEVENTF_UNICODE))
-                batch.append(one(0, value, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))
+    def send_batch(batch):
+        if not batch:
+            return
         arr = (INPUT * len(batch))(*batch)
         sent = user32.SendInput(len(batch), arr, ctypes.sizeof(INPUT))
         if sent != len(batch):
             raise OSError(f"SendInput sent {sent} of {len(batch)}")
+        time.sleep(0.008)
+
+    for kind, value in split_typing_steps(events):
+        if kind == "enter":
+            # VK_RETURN while Ctrl is down is Ctrl+Enter, which sends the message
+            # in Slack, Teams, and Outlook. Wait until the hotkey is up.
+            if not _wait_mods_released(2.0):
+                logs.event("type: skipped Enter because a modifier was still held")
+                continue
+            send_batch([one(value, 0, 0), one(value, 0, KEYEVENTF_KEYUP)])
+        else:
+            batch = []
+            for unit in value:
+                batch.append(one(0, unit, KEYEVENTF_UNICODE))
+                batch.append(one(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))
+            send_batch(batch)
 
 
 def read_selection():
@@ -178,6 +217,11 @@ def _read_selection_locked():
 def _cursor_previous():
     """One character before the caret, '' at the start of the field, or None if it can't be read."""
     try:
+        import comtypes
+        try:
+            comtypes.CoInitialize()
+        except Exception:
+            pass
         import comtypes.client
         try:
             from comtypes.gen import UIAutomationClient as UIA
@@ -221,28 +265,37 @@ def insert_dictation(text):
         if not prepared:
             return
         spaced = prepared != raw.strip()
-        _last_inserted = prepared
         shown = "" if previous is None else repr(previous)
+        if not type_text(prepared):
+            logs.event(f"insert: failed {len(prepared)} chars previous={source} {shown}")
+            return
+        _last_inserted = prepared
         logs.event(f"insert: {len(prepared)} chars leading-space={spaced} previous={source} {shown}")
-        type_text(prepared)
 
 
 def type_text(text):
-    """Insert text at the cursor, then restore the clipboard when a paste was used."""
+    """Insert text at the cursor. Returns False when nothing was typed."""
     if not text:
-        return
+        return False
     if _modifiers_down():
         logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
-        _send_unicode(text)
-        return
-    with _clip_lock:
-        _paste_text(text)
+        try:
+            _send_unicode(text)
+            return True
+        except Exception as e:
+            logs.event(f"type: unicode input failed: {e!r}; falling back to paste")
+    try:
+        with _clip_lock:
+            _paste_text(text)
+        return True
+    except Exception as e:
+        logs.event(f"type: paste failed: {e!r}")
+        return False
 
 
 def _paste_text(text):
     if pyperclip is None or keyboard is None:
-        logs.event("type: clipboard unavailable")
-        return
+        raise OSError("clipboard unavailable")
     try:
         old = pyperclip.paste()
     except Exception:

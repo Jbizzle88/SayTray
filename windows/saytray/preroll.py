@@ -46,10 +46,47 @@ class Ring:
         self.filled = 0
 
 
+def _quiet_cut(audio, end, sample_rate, window_s=0.35):
+    """Move a cut to a quiet moment in the last part of the slice, when there is one."""
+    frame = max(1, int(sample_rate * 0.02))
+    start = max(0, end - int(sample_rate * window_s))
+    if end - start <= frame:
+        return end
+    edge = audio[max(0, end - frame):end]
+    edge_rms = float(np.sqrt(np.mean(edge * edge))) + 1e-8
+    best = end
+    best_rms = edge_rms
+    i = start
+    while i + frame <= end:
+        seg = audio[i:i + frame]
+        rms = float(np.sqrt(np.mean(seg * seg)))
+        if rms < best_rms:
+            best_rms = rms
+            best = i
+        i += frame
+    if best < end and best_rms < 0.02 and best_rms < edge_rms * 0.5:
+        return best
+    return end
+
+
 def split_pcm(audio, sample_rate, limit_s):
-    """Split a 1-D clip into pieces no longer than limit_s. Order is preserved."""
+    """Split a 1-D clip into pieces no longer than limit_s. Order is preserved.
+
+    A cut near the limit moves earlier when that moment is quiet, so a word is
+    less likely to be sliced in half. Loud audio keeps the hard limit.
+    """
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     step = int(sample_rate * limit_s)
     if step <= 0 or audio.size <= step:
         return [audio]
-    return [audio[i:i + step] for i in range(0, audio.size, step)]
+    parts = []
+    i = 0
+    while i < audio.size:
+        end = min(audio.size, i + step)
+        if end < audio.size:
+            end = _quiet_cut(audio, end, sample_rate)
+            if end <= i:
+                end = min(audio.size, i + step)
+        parts.append(audio[i:end])
+        i = end
+    return parts
