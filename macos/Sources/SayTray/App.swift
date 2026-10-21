@@ -36,7 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     Log.event("launched; accessibility=\(Permissions.accessibility) mic=\(Permissions.mic.rawValue) speech=\(Permissions.speech.rawValue)")
   }
 
-  func applicationWillTerminate(_ n: Notification) { speaker.quit() }
+  func applicationWillTerminate(_ n: Notification) {
+    dictation.shutdown()
+    SelectionReader.cancel()
+    VoiceLibrary.shared.shutdown()
+    speaker.quit()
+  }
 
   private func updateIcon() {
     let name = st.isRecording ? "mic.fill" : (st.isSpeaking ? "speaker.wave.3.fill" : "text.bubble")

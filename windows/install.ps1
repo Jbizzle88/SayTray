@@ -102,12 +102,28 @@ if (!$SkipVoices) {
   foreach ($v in $defaults) {
     foreach ($file in @($v.files)) {
       $o = Join-Path "$R\voices" $file.filename
-      if (!(Test-Path $o) -or (Get-Item $o).Length -eq 0) {
-        Write-Host "  downloading $($file.filename) …"
+      $expect = [int64]$file.sizeBytes
+      $got = -1
+      if (Test-Path $o) { $got = (Get-Item $o).Length }
+      $ok = ($expect -gt 0 -and $got -eq $expect) -or ($expect -le 0 -and $got -gt 0)
+      if (-not $ok) {
+        if ($got -ge 0) {
+          Write-Host "  replacing incomplete $($file.filename) ($got of $expect bytes)"
+        } else {
+          Write-Host "  downloading $($file.filename) …"
+        }
         $tmp = "$o.partial"
         curl.exe -fL --retry 3 --progress-bar -o $tmp $file.url
-        if ($LASTEXITCODE -ne 0) { throw "download failed: $($file.filename)" }
+        if ($LASTEXITCODE -ne 0) {
+          Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+          throw "download failed: $($file.filename)"
+        }
         Move-Item -Force $tmp $o
+        $final = (Get-Item $o).Length
+        if (($expect -gt 0 -and $final -ne $expect) -or $final -le 0) {
+          Remove-Item $o -Force -ErrorAction SilentlyContinue
+          throw "incomplete download: $($file.filename) ($final of $expect bytes)"
+        }
       }
     }
   }

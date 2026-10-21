@@ -65,7 +65,9 @@ enum VoiceCatalog {
   }
 
   static func isInstalled(_ voice: CatalogVoice) -> Bool {
-    voice.files.allSatisfy { fileHasBytes(voicesDirectory().appendingPathComponent($0.filename)) }
+    !voice.files.isEmpty && voice.files.allSatisfy {
+      fileMatches(voicesDirectory().appendingPathComponent($0.filename), expected: $0.sizeBytes)
+    }
   }
 
   static func removeRetired() {
@@ -78,8 +80,10 @@ enum VoiceCatalog {
     }
   }
 
-  private static func fileHasBytes(_ url: URL) -> Bool {
+  /// Exact catalog size. A short or corrupt download is not a voice.
+  static func fileMatches(_ url: URL, expected: Int) -> Bool {
     let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+    if expected > 0 { return size == Int64(expected) }
     return size > 0
   }
 
@@ -134,6 +138,16 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
       self.message[id] = "Starting download..."
     }
     startFile(id)
+  }
+
+  func shutdown() {
+    lock.lock()
+    jobs.removeAll()
+    taskVoice.removeAll()
+    let live = session
+    lock.unlock()
+    live?.invalidateAndCancel()
+    Log.event("voices: downloads cancelled")
   }
 
   func delete(_ id: String) {
@@ -213,6 +227,14 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
       return
     }
     let file = job.voice.files[job.index]
+    let expected = Int64(file.sizeBytes)
+    let got = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
+    if expected > 0 ? got != expected : got <= 0 {
+      try? FileManager.default.removeItem(at: location)
+      let detail = expected > 0 ? "\(got) of \(expected) bytes" : "empty file"
+      fail(id, "Download incomplete: \(file.filename) (\(detail))")
+      return
+    }
     let dir = VoiceCatalog.voicesDirectory()
     let dest = dir.appendingPathComponent(file.filename)
     do {
@@ -223,9 +245,8 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
         try FileManager.default.copyItem(at: location, to: dest)
         try? FileManager.default.removeItem(at: location)
       }
-      let size = (try FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
-      if size <= 0 { throw CocoaError(.fileReadCorruptFile) }
     } catch {
+      try? FileManager.default.removeItem(at: dest)
       fail(id, "Could not save \(file.filename)")
       return
     }

@@ -11,6 +11,7 @@ import numpy as np
 from . import logs
 from .preroll import Ring
 from .segments import SEGMENT_S, stitch_audio
+from .config import coerce_bool
 from .selection import insert_dictation
 
 SR = 16000
@@ -37,6 +38,7 @@ class Dictation:
         self._pre_samples = 0
         self._pressed_at = None
         self._first_live_at = None
+        self._closed = False
         threading.Thread(target=self._load_model, daemon=True, name="whisper-load").start()
         threading.Thread(target=self._open_warm, daemon=True, name="dictation-warm").start()
 
@@ -66,8 +68,9 @@ class Dictation:
 
     def _open_warm(self):
         with self._open_lock:
-            if self._stream_ok():
-                return False
+            with self._lock:
+                if self._closed or self._stream_ok():
+                    return False
             import sounddevice as sd
             try:
                 stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", callback=self._cb)
@@ -76,6 +79,12 @@ class Dictation:
                 logs.event(f"dictation: microphone open failed: {e!r}")
                 return False
             with self._lock:
+                if self._closed:
+                    try:
+                        stream.stop(); stream.close()
+                    except Exception:
+                        pass
+                    return False
                 old, self._stream = self._stream, stream
             if old is not None:
                 try:
@@ -88,6 +97,9 @@ class Dictation:
     def start(self):
         pressed = time.monotonic()
         with self._lock:
+            if self._closed:
+                logs.event("dictation: start ignored, shutting down")
+                return
             if self._phase == "recording":
                 logs.event("dictation: start ignored, already recording")
                 return
@@ -167,6 +179,27 @@ class Dictation:
             return
         threading.Thread(target=self._finish, args=(audio, gen), daemon=True, name="dictation-stop").start()
 
+    def shutdown(self):
+        """Close the microphone and drop the capture. Do not transcribe or type."""
+        with self._lock:
+            self._closed = True
+            self._gen += 1
+            self._capturing = False
+            self._phase = "idle"
+            self.recording = False
+            self._frames = []
+            stream = self._stream
+            self._stream = None
+            self._ring.clear()
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+        logs.event("dictation: shutdown")
+        self._state()
+
     def _finish(self, audio, gen):
         try:
             self._transcribe(audio, gen)
@@ -176,7 +209,7 @@ class Dictation:
                     self._phase = "idle"
 
     def _chime(self, kind):
-        chime_on = True if self.settings is None else bool(self.settings["chime"])
+        chime_on = True if self.settings is None else coerce_bool(self.settings["chime"], True)
         if not chime_on or self.player is None:
             logs.event(f"dictation: {kind} chime skipped")
             return None
@@ -236,8 +269,16 @@ class Dictation:
         # One model call at a time, and the paste happens before the next session's
         # transcript, so rapid holds stay in order.
         with self._transcribe_lock:
+            with self._lock:
+                if self._closed or gen != self._gen:
+                    logs.event(f"dictation: drop transcript gen {gen} (shut down)")
+                    return
             text = stitch_audio(audio, SR, SEGMENT_S, transcribe_audio, on_resplit=on_resplit)
             logs.event(f"dictation: gen {gen} audio {dur:.2f}s transcript {len(text)} chars in {time.time() - t0:.1f}s")
+            with self._lock:
+                if self._closed or gen != self._gen:
+                    logs.event(f"dictation: drop transcript gen {gen} (shut down)")
+                    return
             if text:
                 insert_dictation(text)
 

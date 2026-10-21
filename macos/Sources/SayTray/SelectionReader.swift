@@ -62,6 +62,15 @@ enum SelectionReader {
   private static var typing = false
   private static var lastInserted = ""
 
+  /// Drop queued inserts. Used on quit so a transcript is not typed as the app exits.
+  static func cancel() {
+    let work = {
+      Self.pending.removeAll()
+      Self.typing = false
+    }
+    if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+  }
+
   static func type(_ text: String) {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
@@ -89,8 +98,13 @@ enum SelectionReader {
       previous = lastInserted.last
       source = lastInserted.isEmpty ? "none" : "last-insert"
     }
-    let text = DictationSpacing.apply(raw, previous: previous)
-    let spaced = text != raw
+    let text = DictationSpacing.prepare(raw, previous: previous)
+    guard !text.isEmpty else {
+      typing = false
+      pump()
+      return
+    }
+    let spaced = text != raw.trimmingCharacters(in: .whitespacesAndNewlines) || text.hasPrefix(" ") && !raw.hasPrefix(" ")
     lastInserted = text
     Log.event("insert: \(text.count) chars leading-space=\(spaced) previous=\(source)\(previous.map { " '\($0)'" } ?? "") queued=\(pending.count)")
     let saved = Keys.snapshot()

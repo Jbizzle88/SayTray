@@ -40,12 +40,12 @@ final class PiperEngine {
       if proc?.isRunning == true { shutdownProcess() }
       return false
     }
-    let model = PiperEngine.dir.appendingPathComponent("voices/\(v).onnx")
-    if proc?.isRunning == true && voice == v && FileManager.default.fileExists(atPath: model.path) { return true }
-    guard FileManager.default.fileExists(atPath: model.path) else {
+    guard let catalog = VoiceCatalog.voice(v), VoiceCatalog.isInstalled(catalog) else {
       if voice == v { shutdownProcess() }
       return false
     }
+    let model = PiperEngine.dir.appendingPathComponent("voices/\(v).onnx")
+    if proc?.isRunning == true && voice == v { return true }
     shutdownProcess()
     let p = Process()
     p.executableURL = PiperEngine.python
