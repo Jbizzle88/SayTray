@@ -4,17 +4,18 @@ import Speech
 import SayTrayCore
 import SBObjC
 
-/// Push-to-talk dictation. The microphone stays warm and keeps ~450 ms of audio so the
-/// start of a phrase is not lost to engine startup or the chime. Recognition runs after
-/// the key is released, in ≤50 s pieces, so a long hold is concatenated instead of
-/// keeping only the last segment. Results are handed to `onText` in press order.
+/// Push-to-talk dictation. Every buffer from key-down to key-up is kept (the short ring
+/// is only a pre-roll and does not cap the session). After release, the whole clip is
+/// recognized in ≤30 s requests — under SFSpeechRecognizer's about-one-minute limit —
+/// and the texts are concatenated. A result that does not cover its slice is halved and
+/// recognized again, so a long hold comes out from the start through the end.
 final class Dictation {
   private enum Phase: String { case idle, arming, recording }
   private struct Clip { var buffer: AVAudioPCMBuffer; var seconds: Double }
   private struct Job { var gen: Int; var buffers: [AVAudioPCMBuffer]; var seconds: Double }
 
   private let preRollLimit = 0.45
-  private let segmentLimit = 50.0
+  private let segmentLimit = DictationPlan.segmentLimit
   private let minLive = 0.15
 
   private var engine: AVAudioEngine?
@@ -121,7 +122,7 @@ final class Dictation {
       let live = max(0, total - pre)
       let latencyMs: Double
       if let pressedAt, let liveAt { latencyMs = liveAt.timeIntervalSince(pressedAt) * 1000 } else { latencyMs = -1 }
-      Log.event("dictation: stopped gen \(gen) audio \(sec(total))s pre-roll \(Int((pre * 1000).rounded()))ms live \(sec(live))s first-buffer \(Int(latencyMs.rounded()))ms")
+      Log.event("dictation: stopped gen \(gen) audio \(sec(total))s buffers \(buffers.count) (no duration cap) pre-roll \(Int((pre * 1000).rounded()))ms live \(sec(live))s first-buffer \(Int(latencyMs.rounded()))ms")
       if live < minLive {
         Log.event("dictation: too short, ignored")
         return
@@ -220,10 +221,10 @@ final class Dictation {
     pumping = true
     let job = jobs.removeFirst()
     let chunks = split(job.buffers)
-    Log.event("dictation: transcribing gen \(job.gen) \(sec(job.seconds))s in \(chunks.count) segment(s), \(jobs.count) still queued")
+    Log.event("dictation: kept \(sec(job.seconds))s in \(job.buffers.count) buffers with no duration cap; \(chunks.count) slices of <=\(Int(segmentLimit))s, \(jobs.count) still queued")
     recognizeAll(chunks, index: 0, parts: []) { [weak self] text in
       guard let self else { return }
-      Log.event("dictation: gen \(job.gen) audio \(sec(job.seconds))s transcript \(text.count) chars")
+      Log.event("dictation: gen \(job.gen) audio \(sec(job.seconds))s transcript \(text.count) chars across \(chunks.count) slices")
       if !text.isEmpty { self.onText?(text) }
       self.pumping = false
       self.pump()
@@ -253,34 +254,62 @@ final class Dictation {
       done(DictationSpacing.join(parts))
       return
     }
-    Log.event("dictation: segment \(index + 1)/\(chunks.count) \(sec(audioSeconds(chunks[index])))s")
-    recognizeChunk(chunks[index]) { [weak self] text in
+    let audio = audioSeconds(chunks[index])
+    Log.event("dictation: slice \(index + 1)/\(chunks.count) \(sec(audio))s")
+    recognizeAdaptive(chunks[index], depth: 0) { [weak self] text in
       guard let self else {
         done(DictationSpacing.join(parts + [text]))
         return
       }
+      Log.event("dictation: slice \(index + 1)/\(chunks.count) \(self.sec(audio))s -> \(text.count) chars")
       self.recognizeAll(chunks, index: index + 1, parts: parts + [text], done: done)
     }
   }
 
-  private func recognizeChunk(_ buffers: [AVAudioPCMBuffer], done: @escaping (String) -> Void) {
+  /// One request, then halve and try both halves when the transcript skips the front or the tail.
+  private func recognizeAdaptive(_ buffers: [AVAudioPCMBuffer], depth: Int, done: @escaping (String) -> Void) {
+    let audio = audioSeconds(buffers)
+    recognizeOnce(buffers) { [weak self] text, first, last, failed in
+      guard let self else { done(text); return }
+      let again = depth < 4 && DictationPlan.needsResplit(
+        audioSeconds: audio, firstWordAt: first, lastWordEnd: last, failed: failed, characters: text.count)
+      guard again else { done(text); return }
+      let (left, right) = self.halve(buffers)
+      guard !left.isEmpty, !right.isEmpty else { done(text); return }
+      let firstDesc = first.map { String(format: "%.1f", $0) } ?? "none"
+      let lastDesc = last.map { String(format: "%.1f", $0) } ?? "none"
+      Log.event("dictation: slice \(self.sec(audio))s result \(text.count) chars covered \(firstDesc)s..\(lastDesc)s; splitting so the rest is kept")
+      self.recognizeAdaptive(left, depth: depth + 1) { leftText in
+        self.recognizeAdaptive(right, depth: depth + 1) { rightText in
+          done(DictationSpacing.join([leftText, rightText]))
+        }
+      }
+    }
+  }
+
+  /// text, first-word offset, last-word end, failed. Offsets are seconds into this request.
+  private func recognizeOnce(_ buffers: [AVAudioPCMBuffer], done: @escaping (String, Double?, Double?, Bool) -> Void) {
     guard let rec = recognizer, rec.isAvailable else {
       Log.event("dictation: recognizer unavailable")
-      done("")
+      done("", nil, nil, true)
       return
     }
     let req = SFSpeechAudioBufferRecognitionRequest()
     req.shouldReportPartialResults = true
     req.addsPunctuation = true
     if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+    let audio = audioSeconds(buffers)
     var text = ""
+    var firstWord: Double?
+    var lastWord: Double?
     var finished = false
     var task: SFSpeechRecognitionTask?
     func complete(_ reason: String) {
       guard !finished else { return }
       finished = true
-      Log.event("dictation: segment \(text.count) chars (\(reason))")
-      done(text)
+      let failed = reason != "final"
+      Log.event("dictation: request \(sec(audio))s -> \(text.count) chars first \(firstWord.map { String(format: "%.1f", $0) } ?? "-")s last \(lastWord.map { String(format: "%.1f", $0) } ?? "-")s (\(reason))")
+      done(text, firstWord, lastWord, failed)
     }
     let exc = SBTryObjC {
       task = rec.recognitionTask(with: req) { result, error in
@@ -292,6 +321,9 @@ final class Dictation {
               Log.event("dictation: partial replaced earlier text (\(text.count) chars); concatenating")
             }
             text = merged
+            let segs = r.bestTranscription.segments
+            if let s = segs.first { firstWord = s.timestamp }
+            if let s = segs.last { lastWord = s.timestamp + s.duration }
             if r.isFinal { complete("final") }
           }
           if let error {
@@ -304,16 +336,41 @@ final class Dictation {
     if exc != nil || task == nil {
       finished = true
       Log.event("dictation: recognitionTask failed \(exc ?? "")")
-      done("")
+      done("", nil, nil, true)
       return
     }
     for b in buffers { req.append(b) }
     req.endAudio()
-    DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+    // A 30 s slice can take longer than the audio to come back on device. Cancelling
+    // early is what used to leave only the latest partial.
+    let budget = max(90.0, audio * 4)
+    DispatchQueue.main.asyncAfter(deadline: .now() + budget) {
       guard !finished else { return }
       task?.cancel()
       complete("timeout")
     }
+  }
+
+  private func halve(_ buffers: [AVAudioPCMBuffer]) -> ([AVAudioPCMBuffer], [AVAudioPCMBuffer]) {
+    let mid = audioSeconds(buffers) / 2
+    var left: [AVAudioPCMBuffer] = []
+    var right: [AVAudioPCMBuffer] = []
+    var acc = 0.0
+    var passed = false
+    for b in buffers {
+      if !passed {
+        left.append(b)
+        acc += seconds(b)
+        if acc >= mid { passed = true }
+      } else {
+        right.append(b)
+      }
+    }
+    if right.isEmpty, left.count > 1 {
+      let n = left.count / 2
+      return (Array(left[..<n]), Array(left[n...]))
+    }
+    return (left, right)
   }
 
   private func sec(_ x: Double) -> String { String(format: "%.2f", x) }
