@@ -58,6 +58,27 @@ check(spaced(["hello", "there"]) == "hello there", "back to back words")
 check(spaced(["hello", "there", "friend"]) == "hello there friend", "three inserts in order")
 check(spaced(["hello\n", "there"]) == "hello\nthere", "newline then word")
 
+check(!DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: 0.2, lastWordEnd: 29.5, failed: false, characters: 400), "full slice kept")
+check(DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: 18, lastWordEnd: 29, failed: false, characters: 80), "first word late")
+check(DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: 0.2, lastWordEnd: 4, failed: false, characters: 40), "last word early")
+check(DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: nil, lastWordEnd: nil, failed: true, characters: 0), "failed empty slice")
+check(!DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: nil, lastWordEnd: nil, failed: false, characters: 400), "long text without timestamps")
+check(!DictationPlan.needsResplit(audioSeconds: 5, firstWordAt: 3, lastWordEnd: 4.5, failed: false, characters: 10), "short slice accepted")
+check(DictationPlan.needsResplit(audioSeconds: 30, firstWordAt: nil, lastWordEnd: nil, failed: false, characters: 20), "too little text for 30s")
+
+func fakeLong(_ start: Double, _ end: Double) -> (String, Double?, Double?, Bool) {
+  let audio = end - start
+  if audio > 10 { return ("tail", audio / 2, audio - 0.1, false) }
+  return ("t\(Int(start))", 0.1, audio - 0.1, false)
+}
+for total in [180.0, 300.0] {
+  let text = DictationPlan.stitch(total: total, limit: 30, recognize: fakeLong)
+  let tokens = text.split(separator: " ").map(String.init)
+  let last = Int(total - 7.5)
+  check(tokens.first == "t0", "\(Int(total))s starts at the beginning: \(text.prefix(24))")
+  check(tokens.contains("t\(last)"), "\(Int(total))s includes the last slice t\(last)")
+}
+
 // Corpus invariants
 let dir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Tests/corpus"
 let allowed = CharacterSet.letters.union(.decimalDigits).union(CharacterSet(charactersIn: " .,!?;:'()-"))

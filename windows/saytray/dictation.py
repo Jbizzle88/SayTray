@@ -1,20 +1,20 @@
 """Push-to-talk dictation: record while the hotkey is held, transcribe locally with faster-whisper
 (base.en, CPU int8), type the result at the cursor.
 
-The input stream stays open and keeps ~450 ms of audio, so the start of a phrase is not lost
-to device startup or the chime. The chime is replayed from a preloaded buffer and does not
-delay capture. Long clips are transcribed in 50 s pieces and concatenated, in press order.
+The input stream stays open and keeps ~450 ms of audio. The session itself is every
+sample from key-down to key-up, with no duration cap. Long clips are transcribed in
+30 s pieces (under one Whisper window). A piece whose transcript does not cover it
+is halved and transcribed again, then the pieces are concatenated in order.
 """
 import threading, time
 import numpy as np
 from . import logs
-from .preroll import Ring, split_pcm
+from .preroll import Ring
+from .segments import SEGMENT_S, stitch_audio
 from .selection import insert_dictation
-from .spacing import join_segments
 
 SR = 16000
 _PRE_ROLL_S = 0.45
-_SEGMENT_S = 50.0
 _MIN_LIVE_S = 0.15
 
 
@@ -155,6 +155,7 @@ class Dictation:
         lat = ((first - pressed) * 1000.0) if first is not None and pressed is not None else -1.0
         logs.event(
             f"dictation: stopped gen {gen} audio {len(audio) / SR:.2f}s "
+            f"frames {len(frames)} (no duration cap) "
             f"pre-roll {pre / SR * 1000:.0f}ms live {live / SR:.2f}s first-buffer {lat:.0f}ms"
         )
         if live < int(SR * _MIN_LIVE_S):
@@ -201,23 +202,41 @@ class Dictation:
         if self._model is None:
             logs.event("dictation: no model")
             return
-        chunks = split_pcm(audio, SR, _SEGMENT_S)
-        logs.event(f"dictation: transcribing gen {gen} {dur:.2f}s in {len(chunks)} segment(s)")
+        n_slices = max(1, int((dur + SEGMENT_S - 1e-9) // SEGMENT_S))
+        logs.event(f"dictation: kept {dur:.2f}s with no duration cap; {n_slices} slices of <={SEGMENT_S:.0f}s")
         t0 = time.time()
-        parts = []
+
+        def transcribe_audio(samples):
+            try:
+                # vad off and no conditioning on a previous window: both can drop or
+                # rewrite the front of a long clip. Each slice stands on its own.
+                segs, _ = self._model.transcribe(
+                    samples, language="en", beam_size=1, vad_filter=False,
+                    condition_on_previous_text=False,
+                )
+                segs = list(segs)
+            except Exception as e:
+                logs.event(f"dictation: slice {len(samples) / SR:.1f}s failed: {e!r}")
+                return "", None, None, True
+            text = " ".join(s.text.strip() for s in segs).strip()
+            first = float(segs[0].start) if segs else None
+            last = float(segs[-1].end) if segs else None
+            logs.event(
+                f"dictation: request {len(samples) / SR:.1f}s -> {len(text)} chars "
+                f"first {first if first is not None else '-'}s last {last if last is not None else '-'}s"
+            )
+            return text, first, last, False
+
+        def on_resplit(audio_s, first, last):
+            logs.event(
+                f"dictation: slice {audio_s:.1f}s result did not cover it "
+                f"(first {first} last {last}); splitting so the rest is kept"
+            )
+
         # One model call at a time, and the paste happens before the next session's
-        # transcript, so rapid holds stay in order and are not merged.
+        # transcript, so rapid holds stay in order.
         with self._transcribe_lock:
-            for i, chunk in enumerate(chunks):
-                try:
-                    segs, _ = self._model.transcribe(chunk, language="en", beam_size=1, vad_filter=False)
-                    text = " ".join(s.text.strip() for s in segs).strip()
-                except Exception as e:
-                    logs.event(f"dictation: segment {i + 1} failed: {e!r}")
-                    text = ""
-                logs.event(f"dictation: segment {i + 1}/{len(chunks)} {len(chunk) / SR:.2f}s -> {len(text)} chars")
-                parts.append(text)
-            text = join_segments(parts)
+            text = stitch_audio(audio, SR, SEGMENT_S, transcribe_audio, on_resplit=on_resplit)
             logs.event(f"dictation: gen {gen} audio {dur:.2f}s transcript {len(text)} chars in {time.time() - t0:.1f}s")
             if text:
                 insert_dictation(text)
