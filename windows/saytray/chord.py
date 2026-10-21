@@ -46,6 +46,11 @@ class ModifierArm:
         self.ready = False
 
     def event(self, name, is_down):
+        raw = (name or "").strip().lower()
+        # AltGr is delivered as alt gr / right alt, often with Ctrl. That is how
+        # a German layout types @, and it must not open the microphone.
+        if raw in ("alt gr", "altgr", "right alt"):
+            return False
         key = canonical(name)
         if key not in self.mods:
             return False

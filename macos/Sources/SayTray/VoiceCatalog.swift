@@ -83,7 +83,8 @@ enum VoiceCatalog {
   }
 
   /// Size match, then the catalog hash. A matching `.sha256` marker skips reading the file again.
-  /// A missing or wrong marker hashes the file once for that size and modification time.
+  /// After the first successful hash the marker is trusted on later launches; the model is not
+  /// read again just to paint the menu. A missing marker is hashed off the main thread.
   static func fileTrusted(_ url: URL, expected: Int, sha: String?) -> Bool {
     guard fileMatches(url, expected: expected) else { return false }
     let expect = (sha ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -102,6 +103,8 @@ enum VoiceCatalog {
       return cached
     }
     trustLock.unlock()
+    // The first hash of a model is tens of megabytes. Never do it on the main thread.
+    if Thread.isMainThread { return false }
     guard let digest = sha256Hex(url) else { return false }
     let ok = digest == expect
     if ok {
@@ -117,6 +120,16 @@ enum VoiceCatalog {
 
   private static let trustLock = NSLock()
   private static var trustCache: [String: Bool] = [:]
+
+  /// Hash installed voices that have no marker, off the main thread, then call `done` on a background queue.
+  static func trustInBackground(_ done: @escaping () -> Void) {
+    DispatchQueue.global(qos: .utility).async {
+      for voice in voices {
+        _ = isInstalled(voice)
+      }
+      done()
+    }
+  }
 
   static func removeRetired() {
     guard let removed = file?.removed else { return }
@@ -300,7 +313,10 @@ final class VoiceLibrary: NSObject, ObservableObject, URLSessionDownloadDelegate
     lock.unlock()
     let dir = VoiceCatalog.voicesDirectory()
     for name in wrote {
-      try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+      let dest = dir.appendingPathComponent(name)
+      try? FileManager.default.removeItem(at: dest)
+      try? FileManager.default.removeItem(at: URL(fileURLWithPath: dest.path + ".partial"))
+      try? FileManager.default.removeItem(at: VoiceCatalog.markerURL(dest))
     }
     DispatchQueue.main.async {
       self.fraction[id] = nil

@@ -2,8 +2,8 @@
 import collections, os, sys
 import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from saytray.spacing import apply, merge, join_segments, prepare, simulate_inserts
-from saytray.preroll import Ring, split_pcm
+from saytray.spacing import apply, dedupe_boundary, join_overlapped, merge, join_segments, prepare, simulate_inserts
+from saytray.preroll import Ring, overlapped_pieces, split_pcm
 from saytray.segments import SEGMENT_S, needs_resplit, stitch_audio
 from saytray.player import queue_chime
 
@@ -36,6 +36,12 @@ check(merge("Stop", '" and') == 'Stop" and', "closing quote joins the previous w
 check(merge("See", "(attached)") == "See (attached)", "opening parenthesis in a sentence")
 check(merge("price is", "$40") == "price is $40", "dollar amount in a sentence")
 check(apply("$5", "o") == " $5", "dollar amount is spaced")
+check(apply("¿Qué?", "o") == " ¿Qué?", "opening inverted question mark is spaced")
+check(apply("¡Hola!", "o") == " ¡Hola!", "opening inverted exclamation mark is spaced")
+check(dedupe_boundary("I", "It is raining.") == "It is raining.", "I and It stay separate")
+check(dedupe_boundary("the quick brown fox", "brown fox jumps") == "jumps", "overlap drops the repeated words")
+check(join_overlapped(["the quick brown fox", "brown fox jumps"]) == "the quick brown fox jumps", "overlapped slices join once")
+check(join_segments(["I", "It is raining."]) == "I It is raining.", "plain join does not dedupe")
 check(apply("” end", "o") == "” end", "closing quote stays attached")
 check(apply("", "o") == "", "empty text")
 check(simulate_inserts(["hello", "there"]) == "hello there", "back to back")
@@ -150,9 +156,9 @@ def covered(seconds):
     cursor = 0
     gaps = []
     for start, end in leaves:
-        if start != cursor:
+        if start > cursor:
             gaps.append((cursor, start))
-        cursor = end
+        cursor = max(cursor, end)
     check(not gaps and cursor == len(audio) and leaves[0][0] == 0, f"{seconds}s leaves cover the clip, gaps {gaps[:3]} end {cursor}")
     tokens = text.split()
     check(tokens[0] == "t0", f"{seconds}s transcript starts at t0: {tokens[:4]}")
@@ -170,6 +176,47 @@ check(len(pieces) == 10, f"5 min is 10 slices of 30s, got {len(pieces)}")
 check(sum(len(p) for p in pieces) == len(full), "5 min split drops nothing")
 check(pieces[0][0] == 0 and pieces[-1][-1] == full[-1], "5 min keeps the first and last sample")
 
+# A word on a  slice boundary is in both transcripts, then the repeated words are dropped once.
+sr_ov = 100
+words = np.concatenate([np.full(sr_ov // 2, i, np.float32) for i in range(8)])
+wide = overlapped_pieces(words, sr_ov, 2.0, 1.0)
+check(len(wide) > 1, "a clip past the limit becomes more than one slice")
+covered_flags = np.zeros(words.size, dtype=bool)
+for piece in wide:
+    # Each overlapped piece is a contiguous view of the original values.
+    start = int(piece[0]) * (sr_ov // 2)
+    # Values repeat inside a word, so locate the piece by matching the run.
+    pass
+union = np.zeros(words.size, dtype=bool)
+pos_search = 0
+for piece in wide:
+    # Find this piece inside the original. Overlap means it may start before pos_search.
+    found = None
+    for guess in range(0, words.size - piece.size + 1):
+        if np.array_equal(words[guess:guess + piece.size], piece):
+            found = guess
+            break
+    check(found is not None, "overlapped slice is a real span of the recording")
+    if found is not None:
+        union[found:found + piece.size] = True
+        if found < pos_search:
+            pos_search = found
+check(bool(union.all()), "overlap does not drop samples")
+check(max(len(p) for p in wide) <= int(sr_ov * 2.0) + int(sr_ov * 1.0) * 2, "overlap stays a small extension of the limit")
+
+def edge_drop(samples):
+    drop = int(0.6 * sr_ov)
+    core = samples[drop:-drop] if len(samples) > drop * 2 else samples
+    ids = []
+    for value in core:
+        iv = int(value)
+        if not ids or ids[-1] != iv:
+            ids.append(iv)
+    return " ".join(f"w{i}" for i in ids), 0.1, max(0.2, len(samples) / sr_ov - 0.1), False
+
+heard = stitch_audio(words, sr_ov, 2.0, edge_drop)
+check(heard == "w1 w2 w3 w4 w5 w6", f"boundary words survive the overlap: {heard}")
+
 # A quiet moment just before a loud edge moves the cut earlier. Loud audio does not.
 quiet = np.concatenate([
     np.full(65, 0.5, np.float32),
@@ -181,7 +228,7 @@ quiet_parts = split_pcm(quiet, 100, 1.0)
 check(len(quiet_parts[0]) < 100, f"quiet cut moved earlier: {len(quiet_parts[0])}")
 check(np.array_equal(np.concatenate(quiet_parts), quiet), "quiet cut drops nothing")
 
-from saytray.selection import VK_RETURN, split_typing_steps, unicode_events
+from saytray.selection import VK_RETURN, _MOD_WAIT_S, split_typing_steps, text_before_units, unicode_events
 from saytray.config import backup_unreadable, coerce_bool, coerce_hotkey, hotkey_ok, hotkey_registerable, read_settings, sanitize, write_atomic
 
 events = unicode_events("a\r\nb")
@@ -244,28 +291,33 @@ class _FakeUser32:
 _fake_user = _FakeUser32()
 _old_user = sel._user32
 _old_wait = sel._wait_mods_released
+seen_wait = {}
+def _mods_stay_down(timeout=None):
+    seen_wait["timeout"] = timeout
+    return False
 sel._user32 = lambda: _fake_user
-sel._wait_mods_released = lambda timeout=None: False
+sel._wait_mods_released = _mods_stay_down
 held = False
 try:
     sel._send_unicode("a\nb")
 except sel.InputIncomplete as e:
     held = e.sent == 1
 check(held and _fake_user.sent == 1, f"Enter waits, and only the text before it is typed while modifiers stay down: sent={_fake_user.sent}")
-waits = {"n": 0}
-def _release_on_second(timeout=None):
-    waits["n"] += 1
-    return waits["n"] > 1
-sel._wait_mods_released = _release_on_second
+check(seen_wait.get("timeout") == _MOD_WAIT_S, f"the Enter wait is capped: {seen_wait}")
+sel._wait_mods_released = lambda timeout=None: True
 _fake_user.sent = 0
 check(sel._send_unicode("a\nb") == 2, "a and b are the unicode units; Enter is not one")
 check(_fake_user.sent == 3, f"Enter is sent in place once the modifiers come up: {_fake_user.sent}")
 sel._user32 = _old_user
 sel._wait_mods_released = _old_wait
 check(sel._wait_mods_released(0.01) in (True, False), "modifier wait returns a bool")
+check(_MOD_WAIT_S == 30, "Enter waits at most about 30 seconds")
 check(sel.text_after_units("hello world", 5) == " world", "remainder starts after the typed units")
+check(sel.text_before_units("hello world", 5) == "hello", "typed prefix stops at the last full character")
 check(sel.text_after_units("a\nb", 1) == "\nb", "a newline is kept when it was not typed")
 check(sel.text_after_units("😀x", 2) == "x", "an emoji counts as two units")
+check(sel.text_after_units("😀x", 1) == "x", "a split emoji is not typed again")
+check(sel.text_before_units("😀x", 1) == "", "a split emoji is not counted as typed")
 
 _old_mods = sel._modifiers_down
 _old_uni = sel._send_unicode
@@ -274,7 +326,9 @@ _old_leave = sel._leave_on_clipboard
 _old_notice = sel.on_notice
 _old_last = sel._last_inserted
 _old_wait2 = sel._wait_mods_released
+_old_prev = sel._cursor_previous
 try:
+    sel._cursor_previous = lambda: None
     sel._last_inserted = "prior"
     sel._modifiers_down = lambda: True
     sel._wait_mods_released = lambda timeout=None: False
@@ -294,8 +348,13 @@ try:
     check(ok is False and pasted == [], f"paste does not run while the shortcut is held: {pasted}")
     check(left == [" world"], f"the untyped remainder is left on the clipboard: {left}")
     check(any("clipboard" in n.lower() for n in notices), f"the user is told: {notices}")
+    sel._last_inserted = "prior"
+    sel._send_unicode = lambda text: (_ for _ in ()).throw(sel.InputIncomplete(6, "stopped"))
+    sel.insert_dictation("hello world")
+    check(sel._last_inserted.endswith("hello") and "world" not in sel._last_inserted, f"a partial type moves the spacing cursor to what was typed: {sel._last_inserted!r}")
 
     pasted.clear()
+    sel._send_unicode = lambda text: (_ for _ in ()).throw(sel.InputIncomplete(5, "stopped"))
     sel._wait_mods_released = lambda timeout=None: True
     ok = sel.type_text("hello world")
     check(ok is True and pasted == [" world"], f"after release, only the remainder is pasted: {pasted}")
@@ -307,6 +366,7 @@ finally:
     sel.on_notice = _old_notice
     sel._last_inserted = _old_last
     sel._wait_mods_released = _old_wait2
+    sel._cursor_previous = _old_prev
 
 with tempfile.TemporaryDirectory() as d:
     path = os.path.join(d, "settings.json")
@@ -374,11 +434,59 @@ check(slice_is_silent(np.zeros(1600, np.float32), 16000), "digital silence is sk
 check(not slice_is_silent(np.full(1600, 0.002, np.float32), 16000), "quiet speech above 0.001 is kept")
 check(slice_is_silent(np.full(1600, 0.0004, np.float32), 16000), "audio under 0.001 is silence")
 check(not slice_is_silent(np.full(1600, 0.05, np.float32), 16000), "audible audio is kept")
+from saytray.dictation import classify_input, should_prewarm
 check(idle_seconds_for_input("MacBook Pro Microphone") == 600, "a built-in mic stays warm for 10 minutes")
 check(idle_seconds_for_input("AirPods Pro") == 20, "Bluetooth is released quickly")
 check(idle_seconds_for_input("Headset (Hands-Free AG Audio)") == 20, "hands-free is released quickly")
+check(idle_seconds_for_input("Headset (Galaxy Buds2 Pro)") == 20, "a Windows headset name is hands-free")
+check(idle_seconds_for_input("Headset (Jabra Elite 85t Hands-") == 20, "a truncated headset name is hands-free")
 check(idle_seconds_for_input("USB Headset") == 600, "a wired headset stays warm")
-check(idle_seconds_for_input("") == 600 and not input_releases_quickly("unknown"), "an unknown input stays warm")
+check(classify_input("Mic", endpoint_id=r"\\?\BTHHFENUM#x") == "hands-free", "BTHHFENUM is hands-free even with a plain name")
+check(classify_input("Mic", endpoint_id=r"\\?\BTHENUM#x") == "hands-free", "BTHENUM is hands-free")
+check(idle_seconds_for_input("") == 20 and not input_releases_quickly(""), "an unknown input uses the short timeout")
+check(should_prewarm("wired", False) is True, "a closed wired mic can pre-warm")
+check(should_prewarm("hands-free", False) is False, "Bluetooth waits for the main key")
+check(should_prewarm("unknown", False) is False, "an unknown input waits for the main key")
+check(should_prewarm("wired", True) is False, "an open mic is not pre-warmed again")
+
+class _Live:
+    active = True
+
+def _bare_dictation(kind, active):
+    fresh = Dictation.__new__(Dictation)
+    fresh._closed = False
+    fresh._lock = threading.Lock()
+    fresh._open_lock = threading.Lock()
+    fresh._phase = "idle"
+    fresh._input_kind = kind
+    fresh._input_name = "Mic"
+    fresh._endpoint_id = ""
+    fresh._instance_id = ""
+    fresh._stream = _Live() if active else None
+    fresh._idle_timer = None
+    fresh._idle_token = None
+    return fresh
+
+wired_open = _bare_dictation("wired", True)
+opened = [wired_open.warm() for _ in range(20)]
+check(opened == [False] * 20 and wired_open._idle_timer is None, "an open wired mic does not re-warm or stack timers")
+hands_free = _bare_dictation("hands-free", False)
+check(hands_free.warm() is False and hands_free._idle_timer is None, "Bluetooth does not pre-warm")
+armed = _bare_dictation("wired", True)
+armed._after_open()
+first_timer = armed._idle_timer
+check(first_timer is not None and first_timer.is_alive(), "the launch open arms one idle timer")
+armed._phase = "recording"
+before = armed._idle_timer
+armed._after_open()
+check(armed._idle_timer is before, "a recording open does not replace the idle timer")
+armed._phase = "idle"
+armed._arm_mic_idle()
+second_timer = armed._idle_timer
+check(second_timer is not first_timer and first_timer.finished.is_set(), "a new idle timer replaces the previous one")
+second_timer.cancel()
+if first_timer.is_alive():
+    first_timer.cancel()
 check(hotkey_ok("ctrl+alt+ö") and hotkey_ok("ctrl+alt+é"), "a layout-specific hotkey is kept")
 import types
 _kb = types.ModuleType("keyboard")
@@ -479,6 +587,54 @@ mac_app = open(os.path.join(root, "macos/Sources/SayTray/App.swift"), encoding="
 check("#if DEBUG" in mac_app and "debugDictate" in mac_app, "macOS debug triggers are debug-only")
 win_app = open(os.path.join(root, "windows/saytray/app.py"), encoding="utf-8").read()
 check('SAYTRAY_DEBUG' in win_app, "Windows debug trigger is gated")
+
+import builtins
+import saytray.config as cfg
+from saytray.config import Settings
+
+def _check_locked_settings():
+    """A change after a locked read merges onto the real file instead of replacing it."""
+    real_open = builtins.open
+    old_path = cfg.PATH
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "settings.json")
+            saved = {"speed": 1.6, "dictate_hotkey": "ctrl+alt+ö", "voice": "en_US-norman-medium"}
+            with real_open(path, "w", encoding="utf-8") as fh:
+                json.dump(saved, fh)
+            state = {"block": True}
+
+            def guarded(file, mode="r", *args, **kwargs):
+                target = os.path.abspath(file) if isinstance(file, (str, os.PathLike)) else ""
+                writing = any(flag in mode for flag in ("w", "a", "+"))
+                if target == os.path.abspath(path) and not writing and state["block"]:
+                    raise PermissionError("locked")
+                return real_open(file, mode, *args, **kwargs)
+
+            cfg.PATH = path
+            builtins.open = guarded
+            settings = Settings()
+            check(settings._unreadable, "a locked settings file is kept unread")
+            untouched = json.loads(real_open(path, encoding="utf-8").read())
+            check(untouched.get("speed") == 1.6 and untouched.get("dictate_hotkey") == "ctrl+alt+ö", f"a locked read does not rewrite the file: {untouched}")
+            state["block"] = False
+            settings.set(speed=1.2)
+            disk = json.loads(real_open(path, encoding="utf-8").read())
+            check(disk.get("speed") == 1.2, f"the new speed is written: {disk.get('speed')}")
+            check(disk.get("dictate_hotkey") == "ctrl+alt+ö", f"the saved hotkey stays: {disk.get('dictate_hotkey')}")
+            with real_open(path, "w", encoding="utf-8") as fh:
+                json.dump(saved, fh)
+            before = real_open(path, "rb").read()
+            state["block"] = True
+            stuck = Settings()
+            stuck.set(speed=1.2)
+            check(stuck["speed"] == 1.2 and stuck._unreadable, "a still-locked file keeps the change in memory")
+            check(real_open(path, "rb").read() == before, "a still-locked file is not overwritten")
+    finally:
+        builtins.open = real_open
+        cfg.PATH = old_path
+
+_check_locked_settings()
 
 print(f"dictation flow tests: {passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

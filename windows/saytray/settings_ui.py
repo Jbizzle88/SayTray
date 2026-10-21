@@ -3,7 +3,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 from .config import hotkey_ok, pretty_voice
-from .voices import (by_id, default_voice, delete_voice, downloads, format_size, is_installed,
+from .voices import (by_id, default_voice, delete_voice, downloads, format_size, is_installed_quick,
                      normalize_speaker, voice_size, voices)
 from . import sapi, startup
 
@@ -97,7 +97,7 @@ def _run(settings, on_saved, test_speak):
             for v in voices():
                 vid = v["id"]
                 st = downloads.status(vid)
-                installed = is_installed(v)
+                installed = is_installed_quick(v)
                 if installed and voice_v.get() == vid:
                     status_vars[vid].set("Selected")
                     mode = "selected"

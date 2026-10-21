@@ -6,7 +6,7 @@ sample from key-down to key-up, with no duration cap. Long clips are transcribed
 30 s pieces (under one Whisper window). A piece whose transcript does not cover it
 is halved and transcribed again, then the pieces are concatenated in order.
 """
-import threading, time
+import os, threading, time
 import numpy as np
 from . import logs
 from .preroll import Ring
@@ -42,16 +42,175 @@ def keep_whisper_segment(text, no_speech_prob, avg_logprob):
     return True
 
 
-def input_releases_quickly(name):
-    """Bluetooth and hands-free inputs degrade headphone audio while the mic is open."""
-    n = (name or "").lower()
-    return any(mark in n for mark in ("bluetooth", "hands-free", "hands free", "airpod", " ag audio", "hfp", "hsp"))
+_HANDSFREE_MARKS = ("bluetooth", "hands-free", "hands free", "airpod", " ag audio", "hfp", "hsp")
 
 
-def idle_seconds_for_input(name):
-    if input_releases_quickly(name):
-        return _IDLE_MIC_HANDSFREE_S
-    return _IDLE_MIC_WIRED_S
+def classify_input(name="", endpoint_id="", instance_id=""):
+    """'hands-free', 'wired', or 'unknown'.
+
+    Bluetooth shows up as BTHENUM or BTHHFENUM on the Windows endpoint, even when
+    the PortAudio name is truncated. A name that starts with 'Headset (' is the
+    Windows hands-free endpoint. An empty result is unknown, and unknown uses the
+    short timeout so a headset is not left in call quality.
+    """
+    blob = f"{endpoint_id}\n{instance_id}".upper()
+    if "BTHHFENUM" in blob or "BTHENUM" in blob:
+        return "hands-free"
+    n = (name or "").strip()
+    low = n.lower()
+    if low.startswith("headset ("):
+        return "hands-free"
+    if any(mark in low for mark in _HANDSFREE_MARKS):
+        return "hands-free"
+    if not n and not blob.strip():
+        return "unknown"
+    return "wired"
+
+
+def combine_input_kinds(*kinds):
+    if "hands-free" in kinds:
+        return "hands-free"
+    if "wired" in kinds:
+        return "wired"
+    return "unknown"
+
+
+def input_releases_quickly(name="", endpoint_id="", instance_id=""):
+    """True when this input should not stay open. Unknown is not 'quickly' by name."""
+    return classify_input(name, endpoint_id, instance_id) == "hands-free"
+
+
+def idle_seconds_for_input(name="", endpoint_id="", instance_id=""):
+    if classify_input(name, endpoint_id, instance_id) == "wired":
+        return _IDLE_MIC_WIRED_S
+    return _IDLE_MIC_HANDSFREE_S
+
+
+def should_prewarm(kind, already_open):
+    """Modifier pre-warm is only for a wired mic that is currently closed."""
+    return kind == "wired" and not already_open
+
+
+def _windows_capture_ids():
+    """Default capture endpoint id and device instance id. Empty off Windows."""
+    if os.name != "nt":
+        return "", ""
+    try:
+        return _mmdevice_capture_ids()
+    except Exception:
+        return "", ""
+
+
+def _mmdevice_capture_ids():
+    import ctypes
+    from ctypes import wintypes
+    ole32 = ctypes.windll.ole32
+    CLSCTX_ALL = 23
+    eCapture = 1
+    eMultimedia = 1
+    COINIT_APARTMENTTHREADED = 2
+
+    def guid(text):
+        import uuid
+        u = uuid.UUID(text)
+        raw = (ctypes.c_byte * 16).from_buffer_copy(u.bytes_le)
+        return raw
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("data", ctypes.c_byte * 16)]
+
+    class PROPERTYKEY(ctypes.Structure):
+        _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
+
+    class PROPVARIANT(ctypes.Structure):
+        class _U(ctypes.Union):
+            _fields_ = [("pwszVal", ctypes.c_wchar_p)]
+        _fields_ = [
+            ("vt", wintypes.USHORT),
+            ("r1", wintypes.USHORT),
+            ("r2", wintypes.USHORT),
+            ("r3", wintypes.USHORT),
+            ("u", _U),
+        ]
+
+    ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+    ole32.CoCreateInstance.argtypes = [
+        ctypes.POINTER(GUID), ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)
+    ]
+    ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    clsid = GUID(guid("BCDE0395-E52F-467C-8E3D-C4579291692E"))
+    iid_enum = GUID(guid("A95664D2-9614-4F35-A746-DE8DB63617E6"))
+    iid_store = GUID(guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"))
+    enumerator = ctypes.c_void_p()
+    hr = ole32.CoCreateInstance(ctypes.byref(clsid), None, CLSCTX_ALL, ctypes.byref(iid_enum), ctypes.byref(enumerator))
+    if hr < 0 or not enumerator:
+        return "", ""
+
+    def vtbl(ptr, slot, restype, *argtypes):
+        table = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+        proto = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)
+        return proto(table[slot])
+
+    endpoint = ctypes.c_void_p()
+    get_default = vtbl(enumerator, 4, ctypes.HRESULT, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))
+    hr = get_default(enumerator, eCapture, eMultimedia, ctypes.byref(endpoint))
+    if hr < 0 or not endpoint:
+        return "", ""
+    id_ptr = ctypes.c_wchar_p()
+    get_id = vtbl(endpoint, 5, ctypes.HRESULT, ctypes.POINTER(ctypes.c_wchar_p))
+    endpoint_id = ""
+    if get_id(endpoint, ctypes.byref(id_ptr)) >= 0 and id_ptr.value:
+        endpoint_id = id_ptr.value
+        ole32.CoTaskMemFree(id_ptr)
+    instance_id = ""
+    store = ctypes.c_void_p()
+    open_store = vtbl(endpoint, 4, ctypes.HRESULT, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))
+    if open_store(endpoint, 0, ctypes.byref(store)) >= 0 and store:
+        key = PROPERTYKEY()
+        key.fmtid = GUID(guid("78C34FC8-104A-4ACA-9EA4-524D52996E57"))
+        key.pid = 256
+        var = PROPVARIANT()
+        get_value = vtbl(store, 5, ctypes.HRESULT, ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT))
+        if get_value(store, ctypes.byref(key), ctypes.byref(var)) >= 0 and var.vt == 31 and var.u.pwszVal:
+            instance_id = var.u.pwszVal
+        release = vtbl(store, 2, ctypes.c_ulong)
+        release(store)
+    release_dev = vtbl(endpoint, 2, ctypes.c_ulong)
+    release_dev(endpoint)
+    release_enum = vtbl(enumerator, 2, ctypes.c_ulong)
+    release_enum(enumerator)
+    return endpoint_id or "", instance_id or ""
+
+
+def _host_input_names():
+    """Default input name, plus the WASAPI name when PortAudio has that host API.
+
+    MME truncates names to 31 characters. WASAPI keeps the full 'Headset (…)' name.
+    """
+    try:
+        import sounddevice as sd
+    except Exception:
+        return "", ""
+    short = ""
+    try:
+        dev = sd.query_devices(kind="input")
+        short = ((dev or {}).get("name") or "") if isinstance(dev, dict) else ""
+    except Exception:
+        short = ""
+    wasapi = ""
+    try:
+        for api in sd.query_hostapis():
+            if "WASAPI" not in str(api.get("name") or "").upper():
+                continue
+            idx = api.get("default_input_device", -1)
+            if idx is None or int(idx) < 0:
+                continue
+            info = sd.query_devices(int(idx))
+            wasapi = (info or {}).get("name") or ""
+            break
+    except Exception:
+        wasapi = ""
+    return short, wasapi
 
 
 def slice_is_silent(samples, sample_rate):
@@ -87,6 +246,10 @@ class Dictation:
         self.on_notice = None
         self._model_error = None
         self._input_name = ""
+        self._input_kind = "unknown"
+        self._endpoint_id = ""
+        self._instance_id = ""
+        self._idle_timer = None
         threading.Thread(target=self._load_model, daemon=True, name="whisper-load").start()
         threading.Thread(target=self._open_warm, daemon=True, name="dictation-warm").start()
 
@@ -127,12 +290,19 @@ class Dictation:
                 if self._closed or self._stream_ok():
                     return False
             import sounddevice as sd
-            try:
-                dev = sd.query_devices(kind="input")
-                name = (dev or {}).get("name") or ""
-            except Exception:
-                name = ""
-            self._input_name = name
+            short, wasapi = _host_input_names()
+            endpoint, instance = _windows_capture_ids()
+            name = wasapi or short
+            if short and wasapi and len(wasapi) >= len(short):
+                name = wasapi
+            kind = combine_input_kinds(
+                classify_input(short, endpoint, instance),
+                classify_input(wasapi, endpoint, instance),
+            )
+            self._input_name = name or short
+            self._input_kind = kind
+            self._endpoint_id = endpoint
+            self._instance_id = instance
             try:
                 stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", callback=self._cb)
                 stream.start()
@@ -152,29 +322,35 @@ class Dictation:
                     old.stop(); old.close()
                 except Exception:
                     pass
-            kind = "hands-free" if input_releases_quickly(name) else "wired"
             logs.event(
-                f"dictation: pre-roll microphone running input={name or 'unknown'!r} "
-                f"kind={kind} idle={idle_seconds_for_input(name):.0f}s"
+                f"dictation: pre-roll microphone running input={self._input_name or 'unknown'!r} "
+                f"kind={kind} idle={idle_seconds_for_input(self._input_name, endpoint, instance):.0f}s"
             )
+            self._after_open()
             return True
 
-    def warm(self):
-        """Open the input when the dictate modifiers go down, before the main key.
+    def _after_open(self):
+        """Arm one idle timer when the launch open (or a later open) finds us idle."""
+        with self._lock:
+            idle = (not self._closed) and self._phase == "idle"
+        if idle:
+            self._arm_mic_idle()
 
-        A pending idle release is cancelled and the idle clock starts again, so the
-        lead-in is still there when the main key follows.
+    def warm(self):
+        """Open a closed wired mic when the dictate modifiers go down.
+
+        Already-open mics are left alone, so a modifier does not stack idle timers.
+        Bluetooth and unknown inputs wait for the main key, so a headset is not
+        pulled into a call just because Option or Alt was tapped.
         """
         if self._closed:
             return False
         with self._lock:
-            self._idle_token = None
             running = self._stream_ok()
-        opened = False
-        if not running:
-            opened = bool(self._open_warm())
-        if opened or running:
-            self._arm_mic_idle()
+            kind = self._input_kind
+        if not should_prewarm(kind, running):
+            return False
+        opened = bool(self._open_warm())
         if opened:
             logs.event("dictation: pre-roll re-warmed on modifier")
         return opened
@@ -235,10 +411,9 @@ class Dictation:
         if just_opened:
             logs.event("dictation: microphone was just opened before the chime")
         label = {True: "played", False: "FAILED"}.get(chime_ok, "off")
-        kind = "hands-free" if input_releases_quickly(self._input_name) else "wired"
         logs.event(
             f"dictation: capture gen {gen} chime={label} pre-roll {pre_s * 1000:.0f}ms "
-            f"input={self._input_name or 'unknown'!r} kind={kind}"
+            f"input={self._input_name or 'unknown'!r} kind={self._input_kind}"
         )
         self._state()
 
@@ -289,14 +464,20 @@ class Dictation:
         threading.Thread(target=self._finish, args=(audio, gen), daemon=True, name="dictation-stop").start()
 
     def _arm_mic_idle(self):
+        old = self._idle_timer
+        self._idle_timer = None
+        if old is not None:
+            old.cancel()
         token = time.monotonic()
         name = self._input_name
-        seconds = idle_seconds_for_input(name)
+        kind = self._input_kind or classify_input(name, self._endpoint_id, self._instance_id)
+        seconds = _IDLE_MIC_WIRED_S if kind == "wired" else _IDLE_MIC_HANDSFREE_S
         self._idle_token = token
-        kind = "hands-free" if input_releases_quickly(name) else "wired"
+        self._input_kind = kind
         logs.event(f"dictation: mic stays open for {seconds:.0f}s ({kind}, {name or 'unknown input'})")
         timer = threading.Timer(seconds, self._close_if_idle, args=(token,))
         timer.daemon = True
+        self._idle_timer = timer
         timer.start()
 
     def _close_if_idle(self, token):
@@ -313,8 +494,7 @@ class Dictation:
                 stream.close()
             except Exception:
                 pass
-            kind = "hands-free" if input_releases_quickly(name) else "wired"
-            logs.event(f"dictation: microphone released after idle ({kind})")
+            logs.event(f"dictation: microphone released after idle ({self._input_kind})")
 
     def _notify(self, message):
         logs.event("dictation: " + message)

@@ -25,7 +25,9 @@ INPUT_KEYBOARD = 1
 _clip_lock = threading.Lock()
 _insert_lock = threading.Lock()
 _last_inserted = ""
+_typed_prefix = ""
 on_notice = None
+_MOD_WAIT_S = 30.0
 
 
 class InputIncomplete(Exception):
@@ -82,25 +84,51 @@ def _notify(message):
             pass
 
 
-def text_after_units(text, sent_units):
-    """The part of `text` that comes after `sent_units` UTF-16 code units. Newlines are not units."""
+def text_before_units(text, sent_units):
+    """Characters fully covered by `sent_units` UTF-16 units. A split pair is not included."""
     sent_units = int(sent_units or 0)
     if sent_units <= 0:
-        return text or ""
+        return ""
     count = 0
     out = []
     for ch in text or "":
         if ch == "\r":
             continue
         if ch == "\n":
-            if count >= sent_units:
+            if count < sent_units:
+                out.append(ch)
+            continue
+        units = len(ch.encode("utf-16-le")) // 2
+        if count + units <= sent_units:
+            out.append(ch)
+        count += units
+        if count >= sent_units:
+            break
+    return "".join(out)
+
+
+def text_after_units(text, sent_units):
+    """The part of `text` still to send. A character split across the failure is not sent again."""
+    sent_units = int(sent_units or 0)
+    if sent_units <= 0:
+        return text or ""
+    count = 0
+    out = []
+    started = False
+    for ch in text or "":
+        if ch == "\r":
+            continue
+        if ch == "\n":
+            if started or count >= sent_units:
                 out.append(ch)
             continue
         units = len(ch.encode("utf-16-le")) // 2
         if count >= sent_units:
             out.append(ch)
+            started = True
         elif count + units > sent_units:
-            out.append(ch)
+            # The high surrogate was already typed. Skip the whole character.
+            started = True
         count += units
     return "".join(out)
 
@@ -216,11 +244,8 @@ def _send_unicode(text):
         if kind == "enter":
             # VK_RETURN while Ctrl is down is Ctrl+Enter. Hold the newline until
             # the modifiers come up, then send a plain Enter in this same spot.
-            tries = 0
-            while not _wait_mods_released(None):
-                tries += 1
-                if tries >= 3:
-                    raise InputIncomplete(sent_units, "modifiers still held")
+            if not _wait_mods_released(_MOD_WAIT_S):
+                raise InputIncomplete(sent_units, "modifiers still held")
             send_batch([one(value, 0, 0), one(value, 0, KEYEVENTF_KEYUP)])
         else:
             batch = []
@@ -324,6 +349,8 @@ def insert_dictation(text):
         spaced = prepared != raw.strip()
         shown = "" if previous is None else repr(previous)
         if not type_text(prepared):
+            if _typed_prefix:
+                _last_inserted = _typed_prefix
             logs.event(f"insert: failed {len(prepared)} chars previous={source} {shown}")
             return
         _last_inserted = prepared
@@ -344,9 +371,12 @@ def type_text(text):
     only the untyped remainder is pasted, and only after the modifiers are up.
     If they stay down, that remainder is left on the clipboard and this returns False.
     """
+    global _typed_prefix
     if not text:
+        _typed_prefix = ""
         return False
     sent = 0
+    _typed_prefix = ""
     if _modifiers_down():
         logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
         try:
@@ -358,6 +388,7 @@ def type_text(text):
         except Exception as e:
             sent = int(getattr(e, "sent", 0) or 0)
             logs.event(f"type: unicode input failed: {e!r}; will paste the rest after the shortcut is released")
+    _typed_prefix = text_before_units(text, sent)
     remainder = text_after_units(text, sent)
     if not remainder:
         return sent > 0

@@ -16,6 +16,8 @@ final class HotKeyCenter {
   private var monitors: [Any] = []
   private var holdingIds: Set<UInt32> = []
   private var armedMods: Set<UInt32> = []
+  private var armWork: DispatchWorkItem?
+  private var pendingArm: UInt32?
   private var seenHeld: Set<UInt32> = []
   private var missCount: [UInt32: Int] = [:]
   private var watch: Timer?
@@ -77,25 +79,60 @@ final class HotKeyCenter {
         // Repeats must not start a new hold. A poll that ends the chord while the key is still
         // down would otherwise restart dictation on the next repeat.
         if e.isARepeat { continue }
-        if e.keyCode == UInt16(truncatingIfNeeded: s.key.keyCode), modifiersMatch(s.key, e.modifierFlags) {
+        let isDictate = e.keyCode == UInt16(truncatingIfNeeded: s.key.keyCode) && modifiersMatch(s.key, e.modifierFlags)
+        if isDictate {
+          flushArm()
           noteDown(id)
+        } else {
+          // The read hotkey, an accent, or any other key: do not open the mic.
+          cancelArm()
         }
       case .keyUp:
         if e.keyCode == UInt16(truncatingIfNeeded: s.key.keyCode) { noteUp(id) }
       case .flagsChanged:
-        if s.hold, modifiersMatch(s.key, e.modifierFlags) {
+        // A modifier-less dictate key (F13) matches every modifier release. Do not arm it.
+        if s.hold, s.key.carbonMods != 0, modifiersMatch(s.key, e.modifierFlags) {
           if !armedMods.contains(id) {
             armedMods.insert(id)
-            s.arm()
+            scheduleArm(id)
           }
         } else {
           armedMods.remove(id)
+          cancelArm()
         }
         if holdingIds.contains(id), !modifiersMatch(s.key, e.modifierFlags) { noteUp(id) }
       default:
         break
       }
     }
+  }
+
+  private func scheduleArm(_ id: UInt32) {
+    armWork?.cancel()
+    pendingArm = id
+    let work = DispatchWorkItem { [weak self] in self?.fireArm(id) }
+    armWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+  }
+
+  private func cancelArm() {
+    armWork?.cancel()
+    armWork = nil
+    pendingArm = nil
+  }
+
+  private func flushArm() {
+    guard let id = pendingArm else { return }
+    armWork?.cancel()
+    armWork = nil
+    fireArm(id)
+  }
+
+  private func fireArm(_ id: UInt32) {
+    guard pendingArm == id, let s = specs[id], s.hold, s.key.carbonMods != 0 else { return }
+    pendingArm = nil
+    guard modifiersMatch(s.key, NSEvent.modifierFlags) else { return }
+    s.arm()
   }
 
   private func noteDown(_ id: UInt32) {

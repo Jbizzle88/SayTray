@@ -122,8 +122,13 @@ def write_hash_marker(path, sha):
 _trust_cache = {}
 
 
-def file_trusted(path, expected_size, sha):
-    """Size match, then the catalog hash. A matching .sha256 marker skips re-reading the file."""
+def file_trusted(path, expected_size, sha, hash_now=True):
+    """Size match, then the catalog hash. A matching .sha256 marker skips re-reading the file.
+
+    Once a marker is written it is trusted on later launches. The model is not hashed
+    again just to paint the menu. hash_now=False checks the marker and the in-memory
+    cache only, so that paint stays off the file.
+    """
     try:
         st = os.stat(path) if os.path.isfile(path) else None
     except OSError:
@@ -146,6 +151,8 @@ def file_trusted(path, expected_size, sha):
     cached = _trust_cache.get(key)
     if cached is not None:
         return cached
+    if not hash_now:
+        return False
     try:
         digest = sha256_file(path)
     except OSError:
@@ -162,16 +169,49 @@ def file_trusted(path, expected_size, sha):
     return True
 
 
-def is_installed(v, directory=None):
+def is_installed(v, directory=None, hash_now=True):
     directory = directory or VOICES
     files = v.get("files") or []
     if not files:
         return False
     for f in files:
         path = os.path.join(directory, f["filename"])
-        if not file_trusted(path, f.get("sizeBytes") or 0, f.get("sha256") or ""):
+        if not file_trusted(path, f.get("sizeBytes") or 0, f.get("sha256") or "", hash_now=hash_now):
             return False
     return True
+
+
+def is_installed_quick(v, directory=None):
+    """Marker or a finished background hash. Does not read the model."""
+    return is_installed(v, directory, hash_now=False)
+
+
+def start_trust_check(directory=None, on_done=None):
+    """Hash voices that have no marker on a background thread, then call on_done."""
+    def work():
+        try:
+            for v in voices():
+                try:
+                    is_installed(v, directory, hash_now=True)
+                except Exception:
+                    pass
+        finally:
+            if on_done:
+                try:
+                    on_done()
+                except Exception:
+                    pass
+    threading.Thread(target=work, daemon=True, name="voice-trust").start()
+
+
+def discard_written(paths):
+    """Remove a failed download's files, partials, and hash markers."""
+    for path in paths:
+        for extra in (path, path + ".partial", marker_path(path)):
+            try:
+                os.remove(extra)
+            except OSError:
+                pass
 
 
 def installed_ids(directory=None):
@@ -354,11 +394,7 @@ class Downloads:
             with self._mu:
                 self._again.discard(voice_id)
         except Exception as e:
-            for path in written:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+            discard_written(written)
             if "cancelled" in str(e).lower():
                 self._set(voice_id, state="idle", fraction=0.0, message="")
             else:

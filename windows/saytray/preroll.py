@@ -90,3 +90,32 @@ def split_pcm(audio, sample_rate, limit_s):
         parts.append(audio[i:end])
         i = end
     return parts
+
+
+def overlapped_pieces(audio, sample_rate, limit_s, overlap_s):
+    """Same cuts as split_pcm, plus a short copy of the audio on each side of a cut.
+
+    Every sample is still in at least one piece, in order. The extra samples are how
+    a word that sat on the cut can be heard in both slices. Pieces stay under a minute
+    when the limit is 30 s and the overlap is about a second.
+    """
+    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+    pieces = split_pcm(audio, sample_rate, limit_s)
+    overlap = int(sample_rate * overlap_s) if overlap_s and sample_rate else 0
+    if overlap <= 0 or len(pieces) < 2:
+        return pieces
+    starts = []
+    pos = 0
+    for piece in pieces:
+        starts.append(pos)
+        pos += int(piece.size)
+    out = []
+    for i, piece in enumerate(pieces):
+        a = starts[i]
+        b = a + int(piece.size)
+        if i > 0:
+            a = max(0, a - overlap)
+        if i + 1 < len(pieces):
+            b = min(int(audio.size), b + overlap)
+        out.append(audio[a:b])
+    return out
