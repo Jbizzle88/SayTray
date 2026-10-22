@@ -25,7 +25,7 @@ The zip is source + Install.cmd (no venv/voices). Recipients run Install.cmd onc
 
 ## 4. Upload
 
-Attach the zip to the same **GitHub Release** as the macOS build (`SayTray-1.0.0-macOS.zip` + `SayTray-1.0.0-Windows.zip`).
+Attach the zip to the same **GitHub Release** as the macOS build (`SayTray-<VERSION>-macOS.zip` + `SayTray-<VERSION>-Windows.zip`). The 1.0.0 packages install voices this build removed, so do not ship those zips again.
 
 ## 5. Updating after ship
 
@@ -51,6 +51,6 @@ gh release create v1.0.1 \
   dist/SayTray-1.0.1-Windows.zip
 ```
 
-Include in the notes: Mac Gatekeeper right-click → Open; Mac Accessibility / Microphone / Speech Recognition; Windows default-mic tip; first-run ~360 MB voice download.
+Include in the notes: Mac Gatekeeper right-click → Open; Mac Accessibility / Microphone / Speech Recognition; Windows default-mic tip; first-run ~170 MB voice download (Norman + LJSpeech).
 
 Tag format: `vMAJOR.MINOR.PATCH`.

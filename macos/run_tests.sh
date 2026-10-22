@@ -2,6 +2,14 @@
 # 1) TextPrep unit + corpus tests  2) full pipeline (real Piper + guard) over corpus and past problem texts.
 set -uo pipefail
 cd "$(dirname "$0")"
+python3 ../windows/tests/test_voices.py
+VOICES=$?
+python3 ../windows/tests/test_chord.py
+VOICES=$((VOICES || $?))
+python3 ../windows/tests/test_setup_venv.py
+VOICES=$((VOICES || $?))
+python3 ../windows/tests/test_dictation_flow.py
+VOICES=$((VOICES || $?))
 swift build -c release --product TextPrepTests >/dev/null && "$(swift build -c release --show-bin-path)/TextPrepTests" Tests/corpus "$@"
 UNIT=$?
 mkdir -p build/past
@@ -14,4 +22,4 @@ done
 "$HOME/Applications/SayTray.app/Contents/MacOS/SayTray" --pipeline-test build/pipeline.json Tests/corpus/*.txt build/past/*.txt
 python3 Tests/summarize.py build/pipeline.json
 PIPE=$?
-exit $(( UNIT || PIPE ))
+exit $(( UNIT || PIPE || VOICES ))

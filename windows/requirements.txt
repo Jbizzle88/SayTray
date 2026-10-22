@@ -1,11 +1,18 @@
-piper-tts
-regex
-numpy
-sounddevice
-audiotsm
-pystray
-pillow
-keyboard
-pyperclip
-comtypes
-faster-whisper
+# Python 3.10 or newer. Versions below were checked on PyPI for win_amd64 wheels.
+# numpy 2.5 and pillow 13 have no Windows wheels for 3.10; 3.11 has pillow 13 but not numpy 2.5.
+# The markers keep one file working on 3.10, 3.11, and 3.12+.
+piper-tts==1.8.0
+faster-whisper==1.2.1
+ctranslate2==4.8.3
+regex==2026.9.29
+numpy==2.2.6; python_version < "3.11"
+numpy==2.4.6; python_version == "3.11"
+numpy==2.5.4; python_version >= "3.12"
+sounddevice==0.5.6
+audiotsm==0.1.2
+pystray==0.19.5
+pillow==12.3.0; python_version < "3.11"
+pillow==13.0.0; python_version >= "3.11"
+keyboard==0.13.5
+pyperclip==1.11.0
+comtypes==1.4.17

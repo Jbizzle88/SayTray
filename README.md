@@ -7,20 +7,15 @@
 - Speed control, voice picker, hotkey rebinding, launch at login/startup, dictation chimes
 - No account, no cloud (after a one-time voice download)
 
-**Current release:** [v1.0.0](https://github.com/Jbizzle88/SayTray/releases/tag/v1.0.0)
+**Current source version:** 1.1.0
 
-## Download
-
-| Platform | Package |
-|----------|---------|
-| **macOS** 14+ | [SayTray-1.0.0-macOS.zip](https://github.com/Jbizzle88/SayTray/releases/download/v1.0.0/SayTray-1.0.0-macOS.zip) |
-| **Windows** 10/11 | [SayTray-1.0.0-Windows.zip](https://github.com/Jbizzle88/SayTray/releases/download/v1.0.0/SayTray-1.0.0-Windows.zip) |
+Build from source with the macOS and Windows READMEs. The v1.0.0 zip files on the GitHub release install an older voice set (including voices this build no longer ships) and are not the install for this version. A 1.1.0 package is published from `package_release.sh` / `package_release.ps1` when a release is cut.
 
 All releases: https://github.com/Jbizzle88/SayTray/releases
 
 ### First run (both platforms)
 
-Piper voices are **not** inside the zip (~360 MB). Run the included setup/installer once so voices download into your user Application Support / LocalAppData folder.
+Piper voices are **not** inside the zip. Setup downloads two voices the first time (**about 170 MB**): **Norman (medium)**, the default, and **LJSpeech (high)**. More commercially licensed voices (Kristin, John, Cori, LibriTTS, Bryce, and Jenny (Dioco)) download later from the voice list inside the app. They are stored in your user Application Support / LocalAppData folder.
 
 ### macOS notes
 
@@ -51,4 +46,4 @@ How to cut a new release: [`macos/RELEASING.md`](macos/RELEASING.md) / [`windows
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Piper and voice models have their own licenses (piper-tts / rhasspy piper-voices).
+MIT — see [LICENSE](LICENSE). Piper (GPL-3.0-or-later), espeak-ng (GPL-3.0-or-later), and the voice models have their own licenses — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). LibriTTS is CC BY 4.0. The optional Irish/UK voice is labeled Jenny (Dioco).

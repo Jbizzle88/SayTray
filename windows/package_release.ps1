@@ -18,6 +18,8 @@ foreach ($name in $include) {
     Copy-Item -Recurse $p (Join-Path $Stage $name)
   }
 }
+$notice = Join-Path $Src "..\THIRD_PARTY_NOTICES.md"
+if (Test-Path $notice) { Copy-Item $notice (Join-Path $Stage "THIRD_PARTY_NOTICES.md") }
 # Strip caches from staged package
 Get-ChildItem $Stage -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 Get-ChildItem $Stage -Recurse -Filter "*.pyc" | Remove-Item -Force

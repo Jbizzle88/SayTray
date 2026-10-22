@@ -17,20 +17,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     st.onVoiceChanged = { [weak self] in self?.speaker.warmUp() }
     dictation.onText = { SelectionReader.type($0) }
     registerHotKeys()
+    Log.purgeLegacyOnce()
+    VoiceCatalog.removeRetired()
+    VoiceCatalog.trustInBackground { [weak self] in
+      DispatchQueue.main.async {
+        VoiceLibrary.shared.refresh()
+        self?.speaker.warmUp()
+      }
+    }
     speaker.warmUp()
+    Chime.preload()
+    #if DEBUG
     // Debug/test trigger: post distributed notification "com.jonbecherer.saytray.debugSpeak" with the text as object.
+    // Release builds do not define DEBUG, so these observers are not in the app users install.
     DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.jonbecherer.saytray.debugSpeak"), object: nil, queue: .main) { [weak self] n in
       if let t = n.object as? String, !t.isEmpty { self?.speaker.speak(t) }
     }
     DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.jonbecherer.saytray.debugDictate"), object: nil, queue: .main) { [weak self] n in
       if (n.object as? String) == "start" { self?.dictation.start() } else { self?.dictation.stop() }
     }
+    #endif
     if !Permissions.accessibility { Permissions.promptAccessibility() }
-    if Permissions.mic == .notDetermined || Permissions.speech == .notDetermined { Permissions.requestMicAndSpeech() }
+    if Permissions.mic == .notDetermined || Permissions.speech == .notDetermined {
+      Permissions.requestMicAndSpeech { [weak self] in self?.dictation.warmMicrophone() }
+    } else {
+      dictation.warmMicrophone()
+    }
     Log.event("launched; accessibility=\(Permissions.accessibility) mic=\(Permissions.mic.rawValue) speech=\(Permissions.speech.rawValue)")
   }
 
-  func applicationWillTerminate(_ n: Notification) { speaker.quit() }
+  func applicationWillTerminate(_ n: Notification) {
+    dictation.shutdown()
+    SelectionReader.cancel()
+    VoiceLibrary.shared.shutdown()
+    speaker.quit()
+  }
 
   private func updateIcon() {
     let name = st.isRecording ? "mic.fill" : (st.isSpeaking ? "speaker.wave.3.fill" : "text.bubble")
@@ -39,8 +60,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   private func registerHotKeys() {
+    HotKeyCenter.shared.onModifierSession = { [weak self] held in
+      self?.dictation.setModifierSession(held)
+    }
     HotKeyCenter.shared.set(id: 1, key: st.readKey, down: { [weak self] in self?.readSelection() })
-    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() })
+    HotKeyCenter.shared.set(id: 2, key: st.dictateKey, down: { [weak self] in self?.dictation.start() }, up: { [weak self] in self?.dictation.stop() },     arm: { [weak self] in
+      guard InputRoute.kind() == "wired" else { return }
+      if self?.dictation.warmMicrophone() == true {
+        Log.event("dictation: pre-roll re-warmed on modifier")
+      }
+    }, hold: true)
   }
 
   @objc private func readSelection() {
@@ -95,6 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     Read: \(st.readKey.label)
     Dictate (hold): \(st.dictateKey.label)
+
+    Default voice: Norman. Optional voices include LibriTTS (CC BY 4.0, Zen et al.) and Jenny (Dioco).
+    See THIRD_PARTY_NOTICES for Piper, espeak-ng, and voice licenses.
 
     © Jon Becherer
     """

@@ -2,20 +2,20 @@
 
 Free, offline menu-bar text-to-speech and push-to-talk dictation for macOS.
 
-- **Read selected text aloud** with local Piper neural voices (Ryan high default)
+- **Read selected text aloud** with local Piper neural voices (Norman medium default, LJSpeech high included)
 - **Hold a hotkey to dictate** — text is typed at the cursor
 - Speed control, voice picker, hotkey rebinding, launch at login, permission status, dictation chimes
 
 Works fully offline after the one-time Piper voice download. No account, no cloud.
 
-**Version:** see `VERSION` (currently 1.0.0) · **Requires:** macOS 14+
+**Version:** see `VERSION` (currently 1.1.0) · **Requires:** macOS 14+
 
 ---
 
 ## Install (download zip)
 
 1. Unzip `SayTray-*-macOS.zip`.
-2. Double-click **Setup Piper Voices.command** (one-time; downloads ~360 MB of voices and creates a local Python venv). Needs [Python 3.10+](https://www.python.org/downloads/).
+2. Double-click **Setup Piper Voices.command** (one-time; downloads about **170 MB** of voices — Norman and LJSpeech — and creates a local Python venv). Needs [Python 3.10+](https://www.python.org/downloads/).
 3. Copy `SayTray.app` into `~/Applications` (or `/Applications`).
 4. **First launch (Gatekeeper):** right-click `SayTray.app` → **Open** → Open.  
    SayTray is signed with a local self-signed certificate, **not** Apple notarized. macOS will warn once; after you Open it, future launches are normal.
@@ -79,7 +79,7 @@ If a shortcut stops working after a rebuild with a different signing identity, r
 
 ## Update
 
-Replace `SayTray.app` with a newer build (or re-run `./build.sh` from source). Your settings and Piper voices stay in Application Support. Then bump and rebuild — see `RELEASING.md`.
+Replace `SayTray.app` with a newer build (or re-run `./build.sh` from source). Your settings stay in Application Support. Re-run **Setup Piper Voices** after this voice change so Norman and LJSpeech download (~170 MB). Setup also deletes the old Ryan, Lessac, Amy, and LibriTTS-R files if they are still in the voices folder. A saved voice that SayTray no longer ships falls back to Norman. Then bump and rebuild — see `RELEASING.md`.
 
 ---
 
@@ -98,10 +98,11 @@ Optional: `defaults delete com.jonbecherer.saytray`
 
 ## Notes
 
-- Piper voices live in `~/Library/Application Support/SayTray/piper/` (~360 MB voices + venv). They are **not** inside the zip so the download stays small.
+- Piper voices live in `~/Library/Application Support/SayTray/piper/` (about **170 MB** for the two default voices, plus the venv; optional voices are extra). They are **not** inside the zip so the download stays small.
+- **Voices:** Norman (medium, default, male US), LJSpeech (high, female US). Optional, from Settings: Kristin (medium), John (medium), Cori (high, UK), LibriTTS (high; Speaker 1 (Female), Speaker 2 (Male), Speaker 3 (Female)), Bryce (medium), and Jenny (Dioco).
 - If Piper isn’t set up, SayTray falls back to a macOS system voice.
 - Logs: `~/Library/Logs/SayTray/` (`events.log`, `guard.log`, `helper.log`, `last/`).
 
 ## License / credits
 
-SayTray by Jon Becherer. TTS via [Piper](https://github.com/OHF-voice/piper1-gpl) (piper-tts). Voices from the rhasspy/piper-voices collection on Hugging Face.
+SayTray by Jon Becherer. TTS via [Piper](https://github.com/OHF-voice/piper1-gpl) (piper-tts, GPL-3.0-or-later) and espeak-ng (GPL-3.0-or-later). Voice licenses, the LibriTTS CC BY 4.0 credit, and the Jenny (Dioco) credit are in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
