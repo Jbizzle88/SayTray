@@ -106,15 +106,24 @@ def _lift_alt():
             pass
 
 
-def _wait_alt_clear(timeout=2.0):
-    """True once Alt is no longer blocking Unicode. A physical hold has to be released."""
+def _wait_alt_clear(timeout=2.0, settle=0.1):
+    """True when Alt has stayed up for `settle` seconds.
+
+    One Alt-up is not enough. Autorepeat can put Alt straight back down, and
+    Unicode typed in that gap never appears.
+    """
     _lift_alt()
     t0 = time.time()
+    clear_since = None
     while time.time() - t0 < timeout:
-        if not _alt_blocks_unicode():
+        if _alt_blocks_unicode():
+            clear_since = None
+        elif clear_since is None:
+            clear_since = time.time()
+        elif time.time() - clear_since >= settle:
             return True
         time.sleep(0.02)
-    return not _alt_blocks_unicode()
+    return False
 
 
 def _foreground_hwnd():
@@ -634,22 +643,21 @@ def type_text(text):
     sent = 0
     _typed_prefix = ""
     _neutralize_alt_menu()
+    alt_clear = True
     if _alt_blocks_unicode():
         logs.event("type: Alt is held without Ctrl; waiting so the text is not dropped")
-        if not _wait_alt_clear(2.0):
-            logs.event("type: Alt stayed down; the text was not typed")
-            try:
-                _leave_on_clipboard(text)
-            except Exception as e:
-                logs.event(f"type: could not leave text on the clipboard: {e!r}")
-                return False
-            _notify("Alt was still held, so SayTray did not type. The dictation is on the clipboard.")
-            return False
-    if _modifiers_down():
+        alt_clear = _wait_alt_clear(2.0)
+        if not alt_clear:
+            logs.event("type: Alt did not stay up; pasting once it is released")
+    if alt_clear and _modifiers_down():
         logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
         try:
             sent = _send_unicode(text) or 0
-            return True
+            if _alt_blocks_unicode():
+                logs.event("type: Alt went down while typing; the unicode was not trusted")
+                sent = 0
+            elif sent > 0:
+                return True
         except InputIncomplete as e:
             sent = e.sent
             logs.event(f"type: unicode stopped after {sent} units: {e}")
@@ -660,7 +668,7 @@ def type_text(text):
     remainder = text_after_units(text, sent)
     if not remainder:
         return sent > 0
-    if _modifiers_down():
+    if _modifiers_down() or not alt_clear:
         logs.event("type: waiting for the shortcut to be released before pasting")
         if not _wait_mods_released(2.0):
             try:
@@ -668,7 +676,10 @@ def type_text(text):
             except Exception as e:
                 logs.event(f"type: could not leave text on the clipboard: {e!r}")
                 return False
-            _notify("The shortcut was still held, so SayTray did not paste. The rest of the dictation is on the clipboard.")
+            if not alt_clear:
+                _notify("Alt was still held, so SayTray did not type. The dictation is on the clipboard.")
+            else:
+                _notify("The shortcut was still held, so SayTray did not paste. The rest of the dictation is on the clipboard.")
             return False
     try:
         with _clip_lock:

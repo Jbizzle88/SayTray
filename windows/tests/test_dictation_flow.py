@@ -248,7 +248,7 @@ check(sanitize({"chime": False})["chime"] is False, "real false stays false")
 import json, tempfile, threading, time
 import saytray.selection as sel
 import saytray.dictation as dmod
-from saytray.dictation import Dictation, idle_seconds_for_input, input_releases_quickly, keep_whisper_segment, slice_is_silent
+from saytray.dictation import Dictation, idle_seconds_for_input, input_releases_quickly, keep_whisper_segment, slice_is_silent, transcript_rejected
 from saytray.hotkeys import HotkeySerial
 from saytray.logs import event as log_event, logs_dir, purge_legacy_text_logs, rotate_if_big
 log_event("dictation: test marker")
@@ -374,7 +374,14 @@ try:
     check(ok is False and sent == [] and left == ["alt held text"], f"Alt alone does not report a typed result: {ok} {sent} {left}")
     check(any("Alt" in n for n in notices), f"the user is told Alt blocked typing: {notices}")
     sel._alt_blocks_unicode = lambda: False
-    check(_old_wait_alt(0.05) is True, "typing proceeds once Alt is clear")
+    check(_old_wait_alt(0.4) is True, "typing proceeds once Alt stays up")
+    flick = {"n": 0}
+    def _flicker():
+        flick["n"] += 1
+        return flick["n"] > 2
+    sel._alt_blocks_unicode = _flicker
+    check(_old_wait_alt(0.25, settle=0.1) is False, "Alt autorepeat does not count as a release")
+    sel._alt_blocks_unicode = lambda: False
     pasted = []
     sel._modifiers_down = lambda: False
     sel._paste_text = pasted.append
@@ -479,6 +486,12 @@ with tempfile.TemporaryDirectory() as d:
 check(not keep_whisper_segment("you", 0.9, -1.0), "high no-speech probability is dropped")
 check(not keep_whisper_segment("you", 0.7, -0.6), "quiet low-confidence you is dropped")
 check(keep_whisper_segment("hello there", 0.2, -0.2), "normal speech is kept")
+check(not transcript_rejected("Okay, sounds good.", 2.6), "a normal short phrase is not a runaway")
+runaway = "E-A-S-A-" + ("M-I-N-" * 40)
+check(transcript_rejected(runaway, 2.38), "a 2 second clip of repeated letters is rejected")
+check(transcript_rejected("Yes.", 2.0, compression_ratio=3.1), "a high compression ratio is rejected")
+check(not keep_whisper_segment(runaway, 0.1, -0.2, audio_s=2.38), "the runaway is not typed")
+check(keep_whisper_segment("Okay, sounds good.", 0.1, -0.2, audio_s=2.6), "a real short phrase is kept")
 check(slice_is_silent(np.zeros(1600, np.float32), 16000), "digital silence is skipped")
 check(not slice_is_silent(np.full(1600, 0.002, np.float32), 16000), "quiet speech above 0.001 is kept")
 check(slice_is_silent(np.full(1600, 0.0004, np.float32), 16000), "audio under 0.001 is silence")
@@ -502,7 +515,7 @@ check(classify_input("Steam Streaming Microphone") == "virtual", "Steam Streamin
 check(classify_input("Microphone (Realtek High Definition Audio)") == "wired", "Realtek stays wired")
 check(classify_input("Microsoft Sound Mapper - Input") == "pseudo", "the MME sound mapper is not a real microphone")
 check(classify_input("Primary Sound Capture Driver") == "pseudo", "the primary capture driver is not a real microphone")
-from saytray.dictation import choose_input_index, past_audio_slack, segment_past_audio, model_idle_label
+from saytray.dictation import choose_input_index, past_audio_slack, segment_past_audio, model_idle_label, input_open_order, try_open_input, resample_audio, transcript_rejected
 devices = [
     {"index": 0, "name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1},
     {"index": 1, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 1},
@@ -516,6 +529,75 @@ mapped = [
     {"index": 3, "name": "Primary Sound Capture Driver", "max_input_channels": 2, "hostapi": "MME"},
 ]
 check(choose_input_index(mapped, 1) == 2, "Oculus as default skips the sound mapper and uses the WASAPI microphone")
+oculus_devices = [
+    {"index": 0, "name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": "MME"},
+    {"index": 1, "name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1, "hostapi": "Windows WASAPI"},
+    {"index": 22, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 2, "hostapi": "Windows WASAPI", "default_samplerate": 48000},
+    {"index": 3, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 2, "hostapi": "MME", "default_samplerate": 44100},
+]
+oculus_order = input_open_order(oculus_devices, 1)
+check(oculus_order[:2] == [22, 3], f"Oculus falls through to Realtek WASAPI, then MME: {oculus_order}")
+pinned_order = input_open_order(oculus_devices, 1, pinned_index=3)
+check(pinned_order[0] == 3 and 22 in pinned_order and 1 not in pinned_order, f"a chosen Realtek mic stays selected: {pinned_order}")
+check(len(resample_audio(np.zeros(48000, np.float32), 48000, 16000)) == 16000, "48 kHz capture is resampled to 16 kHz")
+
+class _RateDevice:
+    def __init__(self):
+        self.opened = []
+    def WasapiSettings(self, auto_convert=False):
+        return {"auto_convert": auto_convert}
+    def InputStream(self, **kw):
+        self.opened.append(kw)
+        stream = type("Stream", (), {})()
+        stream.active = False
+        stream.kw = kw
+        stream.closed = False
+        rate = float(kw.get("samplerate") or 0)
+        extra = kw.get("extra_settings")
+        device = kw.get("device")
+        def start():
+            if device == 22 and rate == 16000 and not extra:
+                raise OSError("Invalid sample rate")
+            if device == 22 and rate not in (16000, 48000):
+                raise OSError("Invalid sample rate")
+            if device == 22 and rate == 16000 and not (extra or {}).get("auto_convert"):
+                raise OSError("Invalid sample rate")
+            stream.active = True
+        def close():
+            stream.closed = True
+            stream.active = False
+        stream.start = start
+        stream.close = close
+        return stream
+
+_rate_sd = _RateDevice()
+_rate_info = oculus_devices[2]
+_published = []
+def _remember_rate(rate):
+    _published.append(rate)
+_orig_start_factory = _rate_sd.InputStream
+def _input_stream(**kw):
+    stream = _orig_start_factory(**kw)
+    orig_start = stream.start
+    def start():
+        check(_published and _published[-1] == float(kw.get("samplerate") or 0),
+              f"the callback rate is published before the stream starts: {_published} {kw.get('samplerate')}")
+        orig_start()
+    stream.start = start
+    return stream
+_rate_sd.InputStream = _input_stream
+_opened_stream, _opened_rate = try_open_input(_rate_sd, 22, _rate_info, lambda *a, **k: None, announce_rate=_remember_rate)
+check(_opened_stream is not None and _opened_stream.active and _opened_rate == 16000 and _rate_sd.opened[0].get("extra_settings"),
+      f"WASAPI opens with automatic rate conversion: {_opened_rate} {_rate_sd.opened}")
+_rate_sd.opened.clear()
+def _no_convert(**kw):
+    raise OSError("no converter")
+_rate_sd.WasapiSettings = _no_convert
+_opened_stream, _opened_rate = try_open_input(_rate_sd, 22, _rate_info, lambda *a, **k: None, announce_rate=_remember_rate)
+check(_opened_stream is not None and _opened_stream.active and _opened_rate == 48000,
+      f"WASAPI falls back to the device rate: {_opened_rate}")
+_mme_stream, _mme_rate = try_open_input(_rate_sd, 3, oculus_devices[3], lambda *a, **k: None, announce_rate=_remember_rate)
+check(_mme_stream is not None and _mme_stream.active and _mme_rate == 16000, f"MME opens at 16 kHz: {_mme_rate}")
 check(past_audio_slack(1.4) >= 1.0 and not segment_past_audio(2.0, 1.4), "Send it. ending at 2.0s on 1.4s of audio is kept")
 check(not segment_past_audio(5.1, 4.16), "Yes. ending at 5.1s on 4.16s of audio is kept")
 check(segment_past_audio(18.0, 0.5), "an end far past a short clip is still dropped")
@@ -699,7 +781,9 @@ try:
     fresh._notify = lambda message: None
     audio = np.full(8000, 0.1, np.float32)
     fresh._transcribe(audio, 1)
-    check(inserted == ["second phrase"], f"an older dictation still types when a newer one has started: {inserted}")
+    check(inserted == [] and fresh._model.calls == 0, f"a transcript from an earlier session is not typed: {inserted}")
+    fresh._transcribe(audio, 2)
+    check(inserted == ["second phrase"], f"the current session still types: {inserted}")
     check(fresh._model.kwargs.get("vad_filter") is True and fresh._model.kwargs.get("temperature") == 0.0,
           f"a short clip uses temperature 0 and the VAD filter: {fresh._model.kwargs}")
     check(fresh._model.kwargs.get("no_speech_threshold") == 0.6, "no_speech_threshold stays on")
@@ -757,6 +841,13 @@ try:
     fresh._transcribe(np.full(int(16000 * 3.29), 0.0018, np.float32), 11)
     check(inserted == [], "a quiet clip Whisper marks as no-speech is not typed")
     check(fresh._model.kwargs.get("vad_filter") is True, "a 3s clip still uses the VAD filter")
+    fresh._model.force_nsp = 0.1
+    fresh._model.force_lp = -0.2
+    fresh._model.force_text = "E-A-S-A-" + ("M-I-N-" * 40)
+    fresh._gen = 13
+    inserted.clear()
+    fresh._transcribe(np.full(int(16000 * 2.38), 0.02, np.float32), 13)
+    check(inserted == [], "a repeated hallucination from a short clip is not typed")
     fresh._model.force_nsp = 0.1
     fresh._model.force_lp = -0.2
     fresh._model.force_text = None
@@ -854,6 +945,54 @@ try:
 finally:
     dmod.logs.event = _old_unload_log
 check(any("whisper unloaded after 10 minutes idle" in e for e in _unload_events), f"unload log uses the idle limit: {_unload_events}")
+
+_load_seen = []
+_loader = _bare_dictation("wired", False)
+_loader._model_lock = threading.Lock()
+_loader._model = None
+_loader._model_loading = False
+_loader._model_token = None
+_loader._model_timer = None
+def _keep_load(token):
+    time.sleep(0.05)
+    with _loader._model_lock:
+        if token != _loader._model_token:
+            _loader._model_loading = False
+            _load_seen.append("discard")
+            return
+        _loader._model = "ready"
+        _loader._model_loading = False
+        _load_seen.append("kept")
+_loader._load_model = _keep_load
+_loader._ensure_model()
+_loader._ensure_model()
+time.sleep(0.3)
+check(_loader._model == "ready" and _load_seen == ["kept"], f"a second ensure does not discard the load: {_load_seen} {_loader._model}")
+
+class _ReadSpeaker:
+    def __init__(self, speaking):
+        self.speaking = speaking
+        self.stopped = False
+    def stop(self):
+        self.stopped = True
+        self.speaking = False
+
+class _Listen:
+    def __init__(self):
+        self.drop_preroll = False
+        self.started = False
+    def start(self):
+        self.started = True
+
+from saytray.dictation import begin_dictation
+_talking = _ReadSpeaker(True)
+_listen = _Listen()
+begin_dictation(_talking, _listen)
+check(_talking.stopped and _listen.drop_preroll and _listen.started, "dictation stops a read before it listens")
+_quiet = _ReadSpeaker(False)
+_listen2 = _Listen()
+begin_dictation(_quiet, _listen2)
+check((not _quiet.stopped) and (not _listen2.drop_preroll) and _listen2.started, "dictation leaves a quiet player alone")
 
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 guard_files = [
@@ -999,6 +1138,9 @@ def _check_save_and_startup():
             check("ExecutionPolicy Bypass" not in install, "the installed commands do not use ExecutionPolicy Bypass")
             check("try {" in install and "Could not copy uninstall.ps1" in install, "a blocked uninstall.ps1 copy does not abort the install")
             check("built-in uninstall command" in install, "Apps & Features is not pointed at a missing uninstall script")
+            check("Stop-Process" in install and "run_saytray.pyw" in install, "the fallback uninstall quits SayTray first")
+            check("@('app','venv','debug')" in install and "Settings and voices are kept" in install, "the fallback uninstall keeps settings and voices")
+            check("Remove-Item -LiteralPath '$R' -Recurse" not in install, "the fallback uninstall does not delete the whole SayTray folder")
             check("test_dictation_order.py" in open(os.path.join(os.path.dirname(__file__), "..", "run_tests.ps1"), encoding="utf-8").read()
                   and "test_requirements_wheels.py" in open(os.path.join(os.path.dirname(__file__), "..", "run_tests.ps1"), encoding="utf-8").read(),
                   "run_tests.ps1 includes the order and wheel suites")

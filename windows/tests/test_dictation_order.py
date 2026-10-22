@@ -74,7 +74,7 @@ try:
     check(inserted == [f"w{i}" for i in range(1, 7)], f"every word types in order: {inserted}")
     fresh._gen = 9
     fresh._transcribe(np.full(8000, 0.05, np.float32), 3)
-    check(inserted[-1] == "w7", "an older dictation still types after a newer one has started")
+    check(inserted[-1] == "w6" and fresh._model.n == 6, "an earlier session is not typed into the next one")
     before = len(inserted)
     fresh._gen = 3
     calls = fresh._model.n
