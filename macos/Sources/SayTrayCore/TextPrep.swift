@@ -189,13 +189,22 @@ public enum TextPrep {
 /// Detects Piper babble/skip from audio duration vs. text length.
 /// Primary metric: seconds per phoneme (Piper's own phonemizer). Normal speech ~0.045-0.09 s/phoneme;
 /// observed babble/skips ~0.030-0.037. Word/char ratios are a wide sanity net.
-/// A line under shortWords is not failed for being too slow per phoneme: Norman pauses
-/// between "OK. Yes! No. Hi there." (5 words, 17 phonemes) without babbling. Seconds per
-/// word still rejects a drone. Keep these thresholds identical to windows/saytray/textprep.py.
+/// A line under shortWords is not failed for being too slow per phoneme. Norman's pauses
+/// on "OK. Yes! No. Hi there." measured 5.39 s for 17 phonemes. Each . ! or ? on a short
+/// line adds pauseSeconds. A drone past that still fails. Keep this identical to
+/// windows/saytray/textprep.py, which is what the Windows read path calls.
 public enum BabbleGuard {
   public struct Verdict { public let ok: Bool; public let secPerPhoneme: Double; public let secPerWord: Double; public let reason: String }
   public static var minSPP = 0.043, maxSPP = 0.16, minSPW = 0.12, maxSPW = 1.0
   public static var shortWords = 8
+  public static var shortPhonemes = 25
+  public static var pauseSeconds = 0.45
+  public static func pauseAllowance(text: String, words: Int, phonemes: Int) -> Double {
+    let short = words < shortWords || (phonemes > 0 && phonemes <= shortPhonemes)
+    if !short { return 0 }
+    let stops = text.filter { ".!?".contains($0) }.count
+    return pauseSeconds * Double(stops)
+  }
   public static func check(text: String, seconds: Double, phonemes: Int) -> Verdict {
     let w = max(1, TextPrep.wordCount(text))
     let spw = seconds / Double(w)
@@ -205,7 +214,9 @@ public enum BabbleGuard {
     else if phonemes >= 12 && spp < minSPP { reason = "too fast for its phonemes (skipped speech)" }
     else if phonemes >= 12 && spp > maxSPP && w >= shortWords { reason = "too slow for its phonemes (babble)" }
     else if w >= 4 && spw < minSPW { reason = "too short per word" }
-    else if w >= 4 && spw > maxSPW { reason = "too long per word" }
+    else if w >= 4 && seconds > maxSPW * Double(w) + pauseAllowance(text: text, words: w, phonemes: phonemes) {
+      reason = "too long per word"
+    }
     return Verdict(ok: reason.isEmpty, secPerPhoneme: spp, secPerWord: spw, reason: reason)
   }
 }

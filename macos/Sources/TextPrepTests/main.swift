@@ -38,7 +38,9 @@ check(!BabbleGuard.check(text: "This sentence has exactly eight words in it.", s
 let shortExclaim = "OK. Yes! No. Hi there."
 let paused = BabbleGuard.check(text: shortExclaim, seconds: 3.4, phonemes: 17)
 check(paused.ok && TextPrep.wordCount(shortExclaim) < BabbleGuard.shortWords, "short exclamations with pauses stay speakable: \(paused.reason)")
-let drone = BabbleGuard.check(text: shortExclaim, seconds: 6.5, phonemes: 17)
+let measured = BabbleGuard.check(text: shortExclaim, seconds: 5.39, phonemes: 17)
+check(measured.ok, "Norman's 5.39s short line stays speakable: \(measured.reason)")
+let drone = BabbleGuard.check(text: shortExclaim, seconds: 9.0, phonemes: 17)
 check(!drone.ok && drone.reason == "too long per word", "a short line that drones still fails: \(drone.reason)")
 let skipped = BabbleGuard.check(text: shortExclaim, seconds: 0.5, phonemes: 17)
 check(!skipped.ok && skipped.reason.contains("too fast"), "skipped short speech still fails: \(skipped.reason)")

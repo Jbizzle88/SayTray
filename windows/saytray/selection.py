@@ -20,7 +20,11 @@ MODS = ("ctrl", "alt", "shift", "left windows", "right windows", "alt gr")
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_RETURN = 0x0D
+VK_MENU = 0x12
+# Not a real key. A lone Alt-up opens the menu bar; this tap first makes it a chord.
+VK_UNASSIGNED = 0xE8
 INPUT_KEYBOARD = 1
+_MOD_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5)
 
 _clip_lock = threading.Lock()
 _insert_lock = threading.Lock()
@@ -52,13 +56,48 @@ def _seq():
     return user32.GetClipboardSequenceNumber()
 
 
+def _vk_down(vk):
+    """True/False from GetAsyncKeyState, or None when Windows isn't available."""
+    user32 = _user32()
+    if user32 is None or not hasattr(user32, "GetAsyncKeyState"):
+        return None
+    try:
+        return bool(user32.GetAsyncKeyState(int(vk)) & 0x8000)
+    except Exception:
+        return None
+
+
 def _modifiers_down():
+    """Real modifier state. The keyboard library can stay True for seconds after release."""
+    if any(_vk_down(vk) for vk in _MOD_VKS):
+        return True
+    if all(_vk_down(vk) is False for vk in _MOD_VKS):
+        return False
     if keyboard is None:
         return False
     try:
         return any(keyboard.is_pressed(m) for m in MODS)
     except Exception:
         return False
+
+
+def _tap_vk(vk):
+    user32 = _user32()
+    if user32 is None or not hasattr(user32, "keybd_event"):
+        return False
+    try:
+        user32.keybd_event(int(vk), 0, 0, 0)
+        user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _neutralize_alt_menu():
+    """Send VK 0xE8 before Alt goes up so Windows does not open the menu bar."""
+    if _vk_down(VK_MENU) is False and _vk_down(0xA4) is False and _vk_down(0xA5) is False:
+        return False
+    return _tap_vk(VK_UNASSIGNED)
 
 
 def _wait_mods_released(timeout=1.0):
@@ -134,12 +173,24 @@ def text_after_units(text, sent_units):
 
 
 def _release_mods():
+    alt_down = _vk_down(VK_MENU)
+    if alt_down:
+        _neutralize_alt_menu()
     if keyboard is None:
         return
-    for m in ("alt", "ctrl", "shift"):
+    for name, vk in (("alt", VK_MENU), ("ctrl", 0x11), ("shift", 0x10)):
+        down = _vk_down(vk)
+        if down is None:
+            try:
+                down = keyboard.is_pressed(name)
+            except Exception:
+                down = False
+        if not down:
+            continue
+        if name == "alt" and not alt_down:
+            _neutralize_alt_menu()
         try:
-            if keyboard.is_pressed(m):
-                keyboard.release(m)
+            keyboard.release(name)
         except Exception:
             pass
 
@@ -326,6 +377,19 @@ def _cursor_previous():
         return None
 
 
+def previous_class(previous):
+    """letter, number, space, punct, or none. The character itself is not logged."""
+    if not previous:
+        return "none"
+    if str(previous).isspace():
+        return "space"
+    if any(ch.isalpha() for ch in str(previous)):
+        return "letter"
+    if any(ch.isdigit() for ch in str(previous)):
+        return "number"
+    return "punct"
+
+
 def insert_dictation(text):
     """Space back-to-back dictations, then type. Calls are serialized so pastes stay in order."""
     global _last_inserted
@@ -347,14 +411,14 @@ def insert_dictation(text):
         if not prepared:
             return
         spaced = prepared != raw.strip()
-        shown = "" if previous is None else repr(previous)
+        kind = previous_class(previous)
         if not type_text(prepared):
             if _typed_prefix:
                 _last_inserted = _typed_prefix
-            logs.event(f"insert: failed {len(prepared)} chars previous={source} {shown}")
+            logs.event(f"insert: failed {len(prepared)} chars previous={source} class={kind}")
             return
         _last_inserted = prepared
-        logs.event(f"insert: {len(prepared)} chars leading-space={spaced} previous={source} {shown}")
+        logs.event(f"insert: {len(prepared)} chars leading-space={spaced} previous={source} class={kind}")
 
 
 def _leave_on_clipboard(text):
@@ -377,6 +441,7 @@ def type_text(text):
         return False
     sent = 0
     _typed_prefix = ""
+    _neutralize_alt_menu()
     if _modifiers_down():
         logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
         try:

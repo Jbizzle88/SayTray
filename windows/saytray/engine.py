@@ -1,7 +1,7 @@
 """PiperEngine: one Piper voice loaded once (in-process), serving synthesis requests in order on a worker thread.
 Requests carry a read id for cancellation; retries/sub-chunks are queued with priority.
 Each WAV is written to <dir>/<name>.wav.part, closed, then atomically renamed before the callback."""
-import os, io, wave, threading, dataclasses, time
+import os, io, wave, threading, dataclasses, time, gc
 from .logs import VOICES, event
 
 PUNCT = set(" ,.;:!?'\"-()\u02c8\u02cc\u02d0\u02d1")  # skip spaces, punctuation, stress and length marks
@@ -21,6 +21,8 @@ class PiperEngine:
         self._queue = []
         self._cv = threading.Condition()
         self._fields = None
+        self._used = 0.0
+        self._idle_s = 600.0
         self._t = threading.Thread(target=self._run, daemon=True, name="piper")
         self._t.start()
 
@@ -85,6 +87,8 @@ class PiperEngine:
         from piper import PiperVoice
         t0 = time.time()
         v = PiperVoice.load(os.path.join(VOICES, name + ".onnx"))
+        # piper-tts builds the ONNX session internally and does not take session
+        # options. The arena is released when this voice is dropped after idle.
         with wave.open(io.BytesIO(), "wb") as wf:  # warm-up
             v.synthesize_wav("Ready.", wf, syn_config=self._config(*Noise.NORMAL))
         self._voice, self.voice_name = v, name
@@ -100,12 +104,25 @@ class PiperEngine:
         while True:
             with self._cv:
                 while not self._queue and self._want_voice is None:
-                    self._cv.wait()
+                    if self._voice is None:
+                        self._cv.wait()
+                        continue
+                    idle_for = time.monotonic() - self._used
+                    if idle_for >= self._idle_s:
+                        self._voice = None
+                        self.voice_name = None
+                        self.speaker_id = None
+                        event("piper voice unloaded after idle")
+                        gc.collect()
+                        continue
+                    self._cv.wait(timeout=min(30.0, self._idle_s - idle_for))
+                    continue
                 want = self._want_voice
                 req = None if want else self._queue.pop(0)
             if want:
                 try:
                     self._load(want)
+                    self._used = time.monotonic()
                 except Exception as e:
                     event(f"piper voice load failed: {want}: {e!r}")
                 with self._cv:
@@ -115,6 +132,7 @@ class PiperEngine:
             if self._voice is None:
                 req["done"](None, "no voice loaded")
                 continue
+            self._used = time.monotonic()
             path = os.path.join(req["dir"], req["name"] + ".wav")
             tmp = path + ".part"
             try:

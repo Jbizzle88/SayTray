@@ -367,20 +367,21 @@ with tempfile.TemporaryDirectory() as d:
     check(".bad." in os.path.basename(bak2) and os.path.exists(bak), "a second corrupt file does not overwrite the first backup")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("{not json")
-    data, should = read_settings(path)
+    data, should = read_settings(path)[:2]
     check(data == {} and should is True and os.path.exists(path + ".bad"), "bad JSON is moved aside and will be rewritten")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("[1, 2]")
-    data, should = read_settings(path)
+    data, should = read_settings(path)[:2]
     check(data == {} and should is True and not os.path.exists(path), "JSON that is not an object is moved aside")
     blocked = os.path.join(d, "locked.json")
     os.mkdir(blocked)
     with open(os.path.join(blocked, "keep.txt"), "w", encoding="utf-8") as fh:
         fh.write("stay")
-    data, should = read_settings(blocked)
+    data, should = read_settings(blocked)[:2]
     check(data == {} and should is False, "a read error uses in-memory defaults and does not rewrite")
     check(not os.path.exists(blocked + ".bad") and open(os.path.join(blocked, "keep.txt"), encoding="utf-8").read() == "stay", "a read error does not move the file")
-    missing, should = read_settings(os.path.join(d, "missing.json"))
+    missing, should, missing_notice = read_settings(os.path.join(d, "missing.json"))
+    check(missing_notice is None, "a missing settings file is not announced as corrupt")
     check(missing == {} and should is True, "a missing settings file is not treated as corrupt")
     for name in ("events.log", "events.log.1", "guard.log", "guard.log.1"):
         with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
@@ -431,6 +432,17 @@ check(should_prewarm("wired", False) is True, "a closed wired mic can pre-warm")
 check(should_prewarm("hands-free", False) is False, "Bluetooth waits for the main key")
 check(should_prewarm("unknown", False) is False, "an unknown input waits for the main key")
 check(should_prewarm("wired", True) is False, "an open mic is not pre-warmed again")
+check(classify_input("Headset Microphone (Oculus Virtual Audio Device)") == "virtual", "Oculus is virtual, not a wired headset")
+check(classify_input("Steam Streaming Microphone") == "virtual", "Steam Streaming is virtual")
+check(classify_input("Microphone (Realtek High Definition Audio)") == "wired", "Realtek stays wired")
+from saytray.dictation import choose_input_index
+devices = [
+    {"index": 0, "name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1},
+    {"index": 1, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 1},
+]
+check(choose_input_index(devices, 0) == 1, "a virtual default yields the real microphone")
+check(choose_input_index(devices, 1) is None, "a real default is left alone")
+check(should_prewarm("virtual", False) is False, "a virtual mic is not pre-warmed")
 from saytray.dictation import _PKEY_DEVICE_BUS, _PKEY_DEVICE_ENUMERATOR, propvariant_size
 check(propvariant_size() == 24, f"PROPVARIANT is 24 bytes, got {propvariant_size()}")
 check(_PKEY_DEVICE_BUS == ("b3f8fa53-0004-438e-9003-51a46e139bfc", 2), "Bluetooth is read from the endpoint bus path")
@@ -580,8 +592,16 @@ class _Seg:
     avg_logprob = -0.2
 
 class _Model:
+    def __init__(self):
+        self.kwargs = {}
+        self.calls = 0
     def transcribe(self, samples, **kw):
-        return [_Seg()], None
+        self.kwargs = kw
+        self.calls += 1
+        seg = _Seg()
+        if getattr(self, "force_end", None):
+            seg.end = self.force_end
+        return [seg], None
 
 inserted = []
 old_insert = dmod.insert_dictation
@@ -594,19 +614,34 @@ try:
     fresh._transcribe_lock = threading.Lock()
     fresh._model = _Model()
     fresh._notify = lambda message: None
-    audio = np.full(3200, 0.1, np.float32)
+    audio = np.full(8000, 0.1, np.float32)
     fresh._transcribe(audio, 1)
     check(inserted == ["second phrase"], f"an older dictation still types when a newer one has started: {inserted}")
+    check(fresh._model.kwargs.get("vad_filter") is True and fresh._model.kwargs.get("temperature") == 0.0,
+          f"a short clip uses temperature 0 and the VAD filter: {fresh._model.kwargs}")
+    check(fresh._model.kwargs.get("no_speech_threshold") == 0.6, "no_speech_threshold stays on")
     inserted.clear()
     notices = []
     fresh._notify = notices.append
-    fresh._transcribe(np.zeros(3200, np.float32), 1)
+    fresh._gen = 1
+    fresh._transcribe(np.zeros(8000, np.float32), 1)
     check(inserted == [], "silence is not typed")
     check(any("didn't hear anything" in n for n in notices), f"silence tells the user: {notices}")
     inserted.clear()
     fresh._closed = True
     fresh._transcribe(audio, 1)
     check(inserted == [], "shutdown drops the transcript")
+    fresh._closed = False
+    fresh._gen = 4
+    fresh._model.force_end = 18.0
+    fresh._model.calls = 0
+    inserted.clear()
+    fresh._transcribe(np.full(8000, 0.1, np.float32), 4)
+    check(inserted == [] and fresh._model.calls == 1, "a timestamp past the audio is not typed")
+    calls = fresh._model.calls
+    fresh._gen = 6
+    fresh._transcribe(np.full(11200, 0.002, np.float32), 5)
+    check(fresh._model.calls == calls and inserted == [], "a newer tap supersedes an older noise clip")
 finally:
     dmod.insert_dictation = old_insert
 
@@ -675,6 +710,94 @@ def _check_locked_settings():
         cfg.PATH = old_path
 
 _check_locked_settings()
+
+def _check_save_and_startup():
+    old_replace = os.replace
+    old_tries = cfg._REPLACE_TRIES
+    old_wait = cfg._REPLACE_WAIT_S
+    old_path = cfg.PATH
+    cfg._REPLACE_TRIES = 2
+    cfg._REPLACE_WAIT_S = 0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "settings.json")
+            cfg.write_atomic(path, {"speed": 1.0, "voice": "en_US-norman-medium"})
+            def fail_replace(src, dst):
+                raise PermissionError("locked")
+            os.replace = fail_replace
+            raised = False
+            try:
+                cfg.write_atomic(path, {"speed": 1.4, "voice": "en_US-norman-medium"})
+            except OSError:
+                raised = True
+            check(raised, "a locked replace is reported")
+            check(not os.path.exists(path + ".tmp"), "a failed save removes settings.json.tmp")
+            check(json.load(open(path, encoding="utf-8"))["speed"] == 1.0, "the previous settings stay on disk")
+            os.replace = old_replace
+            cfg.PATH = path
+            settings = cfg.Settings()
+            os.replace = fail_replace
+            settings.set(speed=1.7)
+            check(settings["speed"] == 1.7 and settings._unreadable, "a failed save keeps the new value to merge later")
+            check(settings._held.get("speed") == 1.7, "the unsaved change is remembered")
+            check(not os.path.exists(path + ".tmp"), "settings.set removes the temp file")
+            os.replace = old_replace
+            settings.set(speed=1.7)
+            check(json.load(open(path, encoding="utf-8"))["speed"] == 1.7 and not settings._unreadable, "the next save writes the held change")
+            bom = os.path.join(d, "bom.json")
+            with open(bom, "w", encoding="utf-8-sig") as fh:
+                json.dump({"speed": 1.5, "voice": "en_US-norman-medium"}, fh)
+            data, should, notice = cfg.read_settings(bom)
+            check(should and notice is None and data.get("speed") == 1.5, f"a Notepad BOM file is read: {data} {notice}")
+            bad = os.path.join(d, "bad.json")
+            with open(bad, "w", encoding="utf-8") as fh:
+                fh.write("{")
+            cfg.PATH = bad
+            reset = cfg.Settings()
+            check(bool(reset.reset_notice), "corrupt settings produce a one-time notice")
+            check(os.path.exists(bad + ".bad") or os.path.exists(bad + ".bad." + ""), "the corrupt file is kept beside the new one")
+            from saytray.selection import previous_class
+            check(previous_class("r") == "letter" and previous_class(" ") == "space", "a dictated character is logged by class")
+            check(previous_class(".") == "punct" and previous_class(None) == "none", "punctuation and an empty field have classes")
+            sel_src = open(os.path.join(os.path.dirname(__file__), "..", "saytray", "selection.py"), encoding="utf-8").read()
+            check("repr(previous)" not in sel_src, "the previous character is not written to the log")
+            from saytray import startup
+            blocked_msg = []
+            ok, msg = startup.set_enabled(
+                True, shortcut_path=os.path.join(d, "missing.lnk"),
+                write_shortcut=lambda *a: "access denied",
+                set_run=lambda *a: None,
+                clear_run=lambda: None,
+                run_present=lambda: False,
+            )
+            check(ok is False and "Quarantine" in msg, f"a blocked startup tells the user how to allow SayTray: {msg}")
+            blocked_msg.append(msg)
+            remembered = {}
+            def remember(target, args):
+                remembered["args"] = args
+            ok, msg = startup.set_enabled(
+                True, shortcut_path=os.path.join(d, "nope.lnk"),
+                write_shortcut=lambda *a: "access denied",
+                set_run=remember,
+                clear_run=lambda: None,
+                run_present=lambda: True,
+            )
+            check(ok is True and msg == "" and remembered.get("args"), "a blocked shortcut falls back to the Run key")
+            install = open(os.path.join(os.path.dirname(__file__), "..", "install.ps1"), encoding="utf-8").read()
+            check("Test-Path -LiteralPath $lnk" in install and "Quarantine" in install, "the installer checks shortcuts and explains a block")
+            check("CurrentVersion\\Run" in install, "the installer can save a Run key")
+            check("ExecutionPolicy Bypass" not in install, "the installed commands do not use ExecutionPolicy Bypass")
+            start_src = open(os.path.join(os.path.dirname(__file__), "..", "saytray", "startup.py"), encoding="utf-8").read()
+            check("powershell" not in start_src.lower(), "startup does not launch PowerShell to write a shortcut")
+            speaker_src = open(os.path.join(os.path.dirname(__file__), "..", "saytray", "speaker.py"), encoding="utf-8").read()
+            check("SAYTRAY_DEBUG" in speaker_src and "saytray-read-" in speaker_src, "read audio is kept only in debug mode")
+    finally:
+        os.replace = old_replace
+        cfg._REPLACE_TRIES = old_tries
+        cfg._REPLACE_WAIT_S = old_wait
+        cfg.PATH = old_path
+
+_check_save_and_startup()
 
 print(f"dictation flow tests: {passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

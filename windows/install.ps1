@@ -188,25 +188,74 @@ if (Test-Path $IcoSrc) {
   & "$R\venv\Scripts\python.exe" -c "import sys; sys.path.insert(0, r'$R\app'); from saytray.app import _icon; _icon('idle').save(r'$IcoDst', sizes=[(16,16),(32,32),(48,48),(64,64)])"
 }
 
-# 4. Shortcuts: Start Menu + Startup
+# 4. Shortcuts: Start Menu + Startup. Check that each file exists afterwards.
+# Antivirus behavior shields (Avast, AVG) have quarantined these .lnk files.
 $ws = New-Object -ComObject WScript.Shell
 $targets = @(
   "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SayTray.lnk",
   "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk"
 )
+$blocked = @()
 foreach ($lnk in $targets) {
-  $s = $ws.CreateShortcut($lnk)
-  $s.TargetPath = "$R\venv\Scripts\pythonw.exe"
-  $s.Arguments = "`"$R\app\run_saytray.pyw`""
-  $s.WorkingDirectory = "$R\app"
-  $s.IconLocation = "$IcoDst"
-  $s.Description = "SayTray $Version — read selected text aloud, push-to-talk dictation"
-  $s.Save()
+  $dir = Split-Path -Parent $lnk
+  if ($dir -and !(Test-Path -LiteralPath $dir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  try {
+    $s = $ws.CreateShortcut($lnk)
+    $s.TargetPath = "$R\venv\Scripts\pythonw.exe"
+    $s.Arguments = "`"$R\app\run_saytray.pyw`""
+    $s.WorkingDirectory = "$R\app"
+    $s.IconLocation = "$IcoDst"
+    $s.Description = "SayTray $Version — read selected text aloud, push-to-talk dictation"
+    $s.Save()
+  } catch {
+    Write-Warning "Could not write $lnk : $_"
+  }
+  if (!(Test-Path -LiteralPath $lnk)) { $blocked += $lnk }
+}
+$startupLnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk"
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$runCmd = "`"$R\venv\Scripts\pythonw.exe`" `"$R\app\run_saytray.pyw`""
+if (!(Test-Path -LiteralPath $startupLnk)) {
+  try {
+    New-Item -Path $runKey -Force | Out-Null
+    Set-ItemProperty -Path $runKey -Name "SayTray" -Value $runCmd
+  } catch {
+    Write-Warning "Could not set the startup Run key: $_"
+  }
+  $saved = $null
+  try { $saved = (Get-ItemProperty -Path $runKey -Name "SayTray" -ErrorAction SilentlyContinue).SayTray } catch {}
+  if ($saved) {
+    Write-Output "Launch at startup was saved in the registry because the Startup shortcut was blocked."
+  } else {
+    Write-Warning "SayTray could not turn on launch at startup."
+  }
+} else {
+  Remove-ItemProperty -Path $runKey -Name "SayTray" -ErrorAction SilentlyContinue
+}
+if ($blocked.Count -gt 0) {
+  Write-Warning @"
+SayTray could not create these shortcuts:
+$($blocked -join [Environment]::NewLine)
+
+Your antivirus (often Avast or AVG) or a folder permission blocked them.
+1. Open Avast or AVG, choose Menu, then Quarantine.
+2. Restore install.ps1, uninstall.ps1, and SayTray.lnk if they are listed.
+3. Add an exception for this folder: $R
+4. In Windows Security, open Virus & threat protection, Manage settings, Exclusions, and add the same folder.
+5. Run this installer again.
+
+Until the Startup shortcut or the registry Run key is in place, SayTray will not start when Windows starts.
+"@
 }
 
 # 5. Add/Remove Programs (per-user / HKCU)
 if (Test-Path (Join-Path $Src "uninstall.ps1")) {
   Copy-Item (Join-Path $Src "uninstall.ps1") "$R\app\uninstall.ps1" -Force
+}
+if (!(Test-Path -LiteralPath "$R\app\uninstall.ps1")) {
+  Write-Warning "uninstall.ps1 is missing from $R\app. Antivirus may have quarantined it. Restore it from Avast or AVG Quarantine and allow $R, then run this installer again."
 }
 $arp = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray"
 New-Item -Path $arp -Force | Out-Null
@@ -215,8 +264,9 @@ Set-ItemProperty $arp -Name "DisplayVersion" -Value $Version
 Set-ItemProperty $arp -Name "Publisher" -Value "Jon Becherer"
 Set-ItemProperty $arp -Name "InstallLocation" -Value $R
 Set-ItemProperty $arp -Name "DisplayIcon" -Value $IcoDst
-Set-ItemProperty $arp -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$R\app\uninstall.ps1`""
-Set-ItemProperty $arp -Name "QuietUninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$R\app\uninstall.ps1`" -Quiet"
+# RemoteSigned runs this local script without the Bypass flag antivirus products flag.
+Set-ItemProperty $arp -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$R\app\uninstall.ps1`""
+Set-ItemProperty $arp -Name "QuietUninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$R\app\uninstall.ps1`" -Quiet"
 Set-ItemProperty $arp -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty $arp -Name "NoRepair" -Value 1 -Type DWord
 Set-ItemProperty $arp -Name "EstimatedSize" -Value 520000 -Type DWord

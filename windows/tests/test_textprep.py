@@ -42,8 +42,17 @@ check(not BabbleGuard.check("This sentence has exactly eight words in it.", 12, 
 short = "OK. Yes! No. Hi there."
 paused = BabbleGuard.check(short, 3.4, 17)
 check(paused[0] and word_count(short) < BabbleGuard.SHORT_WORDS, f"short exclamations with pauses stay speakable: {paused}")
-drone = BabbleGuard.check(short, 6.5, 17)
+measured = BabbleGuard.check(short, 5.39, 17)
+check(measured[0], f"Norman's 5.39s short line stays on Piper: {measured}")
+drone = BabbleGuard.check(short, 9.0, 17)
 check(not drone[0] and drone[3] == "too long per word", f"a short line that drones still fails: {drone}")
+from saytray.session import ReadSession
+import saytray.session as sess
+check(sess.BabbleGuard is BabbleGuard, "the Windows read path uses this babble guard")
+spoken = chunks(short)
+check(spoken == [short], f"the short line is one chunk: {spoken}")
+check(BabbleGuard.check(spoken[0], 5.39, 17)[0], "that chunk passes at the measured duration")
+check(ReadSession is not None, "ReadSession is the Windows read path")
 skipped = BabbleGuard.check(short, 0.5, 17)
 check(not skipped[0] and "too fast" in skipped[3], f"skipped short speech still fails: {skipped}")
 check(not chunks("") and not chunks("   \n\u200B 🎉 \n"), "empty input")
