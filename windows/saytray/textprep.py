@@ -210,12 +210,23 @@ class BabbleGuard:
 
     Calibrated: normal speech 0.054-0.103 s/phoneme; confirmed babble/skip ~0.030-0.040.
     A line under SHORT_WORDS (the merged "OK. Yes! No. Hi there." chunk is 5 words and
-    17 phonemes) is not failed for being too slow per phoneme. Norman pauses between
-    those short sentences, and that alone used to look like babble and fall back to the
-    system voice. Seconds per word still rejects a drone, and skipped speech still fails.
+    17 phonemes) is not failed for being too slow per phoneme. Norman pauses on each
+    . ! and ?, and a measured read of that line was 5.39 s (1.08 s/word). Those pauses
+    are allowed on a short line. A drone past that allowance still fails, and skipped
+    speech still fails. The Windows read path calls this same check.
     """
     MIN_SPP, MAX_SPP, MIN_SPW, MAX_SPW = 0.043, 0.16, 0.12, 1.0
     SHORT_WORDS = 8
+    SHORT_PHONEMES = 25
+    PAUSE_S = 0.45
+
+    @classmethod
+    def pause_allowance(cls, text: str, words: int, phonemes: int):
+        short = words < cls.SHORT_WORDS or (0 < phonemes <= cls.SHORT_PHONEMES)
+        if not short:
+            return 0.0
+        stops = sum((text or "").count(mark) for mark in ".!?")
+        return cls.PAUSE_S * stops
 
     @classmethod
     def check(cls, text: str, seconds: float, phonemes: int):
@@ -231,6 +242,6 @@ class BabbleGuard:
             reason = "too slow for its phonemes (babble)"
         elif w >= 4 and spw < cls.MIN_SPW:
             reason = "too short per word"
-        elif w >= 4 and spw > cls.MAX_SPW:
+        elif w >= 4 and seconds > cls.MAX_SPW * w + cls.pause_allowance(text, w, phonemes):
             reason = "too long per word"
         return (reason == "", spp, spw, reason)

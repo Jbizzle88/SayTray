@@ -3,7 +3,7 @@ import os, sys, tempfile
 if not os.environ.get("SAYTRAY_LOG_DIR"):
     os.environ["SAYTRAY_LOG_DIR"] = tempfile.mkdtemp(prefix="saytray-test-logs-")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from saytray.chord import ChordTracker, ModifierArm
+from saytray.chord import ChordTracker, ModifierArm, PressChord
 
 passes = failures = 0
 
@@ -101,6 +101,10 @@ left = ModifierArm("ctrl+alt+space")
 check(left.event("ctrl", True) is False and left.event("left alt", True) is True, "left alt still arms")
 f13 = ModifierArm("f13")
 check(f13.event("ctrl", False) is False and f13.event("f13", True) is False, "a key with no modifiers does not arm")
+read = PressChord("alt+`")
+check(read.event("alt", True) is False and read.event("grave", True) is True, "grave is the Windows name for backtick")
+check(read.event("grave", True) is False, "holding grave does not repeat the read")
+check(read.event("grave", False) is False and read.event("`", True) is True, "backtick fires again after release")
 
 import time, types
 kb = types.ModuleType("keyboard")
@@ -116,9 +120,10 @@ sys.modules["keyboard"] = kb
 from saytray.hotkeys import Hotkeys
 
 class _Ev:
-    def __init__(self, name, down):
+    def __init__(self, name, down, scan_code=None):
         self.name = name
         self.event_type = "down" if down else "up"
+        self.scan_code = scan_code
 
 arms = []
 hk = Hotkeys()
@@ -195,6 +200,15 @@ try:
     check(sessions == [True], "releasing the main key keeps the modifier session")
     hk._event(_Ev("alt", False))
     check(sessions == [True, False], f"releasing a modifier ends the session: {sessions}")
+    reads = []
+    hk.clear()
+    hk.register("alt+`", lambda: reads.append("read"), "ctrl+alt+space", lambda: None, lambda: None)
+    hk._event(_Ev("alt", True))
+    hk._event(_Ev("unknown", True, scan_code=0x29))
+    check(reads == ["read"], f"scan code 41 fires Alt+backtick: {reads}")
+    hk._event(_Ev("unknown", False, scan_code=0x29))
+    hk._event(_Ev("unknown", True, scan_code=0x29))
+    check(reads == ["read", "read"], f"releasing and pressing grave fires again: {reads}")
 finally:
     hk.clear()
     if _prev is None:

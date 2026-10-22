@@ -63,20 +63,23 @@ try:
     amplitudes = (0.05, 0.06, 0.07, 0.08, 0.05, 0.06)
     for i, amp in enumerate(amplitudes, start=1):
         fresh._gen = i
-        fresh._transcribe(np.full(3200, amp, np.float32), i)
+        fresh._transcribe(np.full(8000, amp, np.float32), i)
     check(inserted == [f"w{i}" for i in range(1, 7)], f"every word types in order: {inserted}")
     fresh._gen = 9
-    fresh._transcribe(np.full(3200, 0.05, np.float32), 3)
+    fresh._transcribe(np.full(8000, 0.05, np.float32), 3)
     check(inserted[-1] == "w7", "an older dictation still types after a newer one has started")
     before = len(inserted)
-    fresh._transcribe(np.full(3200, 0.002, np.float32), 3)
-    check(len(inserted) == before + 1, "quiet speech at 0.002 is typed")
-    fresh._transcribe(np.full(3200, 0.0004, np.float32), 3)
-    check(len(inserted) == before + 1, "audio under the silence gate is not typed")
+    fresh._gen = 3
+    calls = fresh._model.n
+    fresh._transcribe(np.full(8000, 0.002, np.float32), 3)
+    check(len(inserted) == before and fresh._model.n == calls, "short quiet noise is not sent to Whisper")
     check(any("didn't hear anything" in n for n in notices), f"dropped silence is announced: {notices}")
+    fresh._gen = 9
+    fresh._transcribe(np.full(11200, 0.002, np.float32), 4)
+    check(fresh._model.n == calls and len(inserted) == before, "a newer tap supersedes an older noise clip")
     fresh._closed = True
     stayed = len(inserted)
-    fresh._transcribe(np.full(3200, 0.08, np.float32), 1)
+    fresh._transcribe(np.full(8000, 0.08, np.float32), 1)
     check(len(inserted) == stayed, "shutdown drops the transcript")
 finally:
     dmod.insert_dictation = old_insert

@@ -7,7 +7,7 @@ key when the modifiers never come up).
 """
 import queue, threading
 from . import logs
-from .chord import ChordTracker, ModifierArm, canonical, chord_parts
+from .chord import ChordTracker, ModifierArm, PressChord, canonical, chord_parts
 from .config import hotkey_registerable
 
 _ARM_DELAY_S = 0.15
@@ -53,12 +53,16 @@ class Hotkeys:
         self._arm_lock = threading.Lock()
         self._dictate_main = ""
         self._read_mods = set()
+        self._read = None
+        self._on_read = None
 
     def register(self, read_combo, on_read, dictate_combo, on_down, on_up, on_arm=None, on_unusable=None, on_modifier=None):
         import keyboard
         self.clear()
         self._on_unusable = on_unusable
-        self._bind(keyboard, read_combo, on_read, suppress=True)
+        self._on_read = on_read
+        self._read = PressChord(read_combo)
+        self._bind_read(keyboard, read_combo)
         # Falsy return suppresses the chord so Space is not typed. Must stay instant —
         # the OS hook thread cannot open the microphone or sleep.
         self._bind(keyboard, dictate_combo, lambda: None, suppress=True)
@@ -71,6 +75,21 @@ class Hotkeys:
         self._on_down, self._on_up, self._on_arm, self._on_modifier = on_down, on_up, on_arm, on_modifier
         self._hook = keyboard.hook(self._event)
         logs.event(f"hotkeys registered: read={read_combo} dictate(hold)={dictate_combo}")
+
+    def _bind_read(self, keyboard, combo):
+        """Suppress the read shortcut. The hook below is what actually fires it.
+
+        keyboard.add_hotkey("alt+`") does not match the Windows name "grave" or
+        scan code 41 (VK_OEM_3), so a hook that only listens for "`" never runs.
+        """
+        names = [combo]
+        if "`" in (combo or ""):
+            names.append(combo.replace("`", "grave"))
+        for name in names:
+            try:
+                self._handles.append(keyboard.add_hotkey(name, lambda: None, suppress=True))
+            except Exception as e:
+                logs.event(f"hotkey {name} suppress hook failed: {e!r}")
 
     def _bind(self, keyboard, combo, callback, suppress):
         if not hotkey_registerable(combo):
@@ -97,7 +116,14 @@ class Hotkeys:
             return
         import keyboard
         is_down = e.event_type == keyboard.KEY_DOWN
-        key = canonical(e.name)
+        raw = e.name
+        if getattr(e, "scan_code", None) in (41, 0x29):
+            raw = "`"
+        key = canonical(raw)
+        if self._read is not None and self._read.event(raw, is_down):
+            logs.event("read: hotkey")
+            if self._on_read:
+                self._on_read()
         if self._arm is not None and self._arm.mods:
             was_ready = self._arm.ready
             if self._arm.event(e.name, is_down):
@@ -140,6 +166,8 @@ class Hotkeys:
         self._cancel_arm()
         self._dictate_main = ""
         self._read_mods = set()
+        self._read = None
+        self._on_read = None
         self._on_modifier = None
 
     def _read_modifiers_held(self):
