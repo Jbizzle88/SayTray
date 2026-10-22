@@ -268,6 +268,7 @@ if (-not $haveUninstall) {
 uninstall.ps1 is missing from $R\app. Antivirus may have quarantined it.
 Restore it from Avast or AVG Quarantine and allow $R, then run this installer again.
 Apps & Features will use a built-in uninstall command until that script is in place.
+That command quits SayTray and removes the program files. Settings and voices are kept.
 "@
 }
 $arp = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray"
@@ -283,7 +284,21 @@ if ($haveUninstall) {
   $quietUninstallCmd = "$uninstallCmd -Quiet"
 } else {
   # Do not point Apps & Features at a script that is not on disk.
-  $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command `"Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name SayTray -ErrorAction SilentlyContinue; Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SayTray.lnk'; Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk'; if (Test-Path -LiteralPath '$R') { Remove-Item -LiteralPath '$R' -Recurse -Force -ErrorAction SilentlyContinue }; Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray' -Recurse -Force -ErrorAction SilentlyContinue`""
+  # Quit SayTray first. Remove the program files only. settings.json and voices stay.
+  $inlineUninstall = @"
+Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object { `$_.CommandLine -like '*run_saytray.pyw*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Milliseconds 800
+Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name SayTray -ErrorAction SilentlyContinue
+Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SayTray.lnk'
+Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk'
+foreach (`$dir in @('app','venv','debug')) {
+  `$p = Join-Path '$R' `$dir
+  if (Test-Path -LiteralPath `$p) { Remove-Item -LiteralPath `$p -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray' -Recurse -Force -ErrorAction SilentlyContinue
+"@
+  $encodedUninstall = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inlineUninstall))
+  $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -EncodedCommand $encodedUninstall"
   $quietUninstallCmd = $uninstallCmd
 }
 Set-ItemProperty $arp -Name "UninstallString" -Value $uninstallCmd
