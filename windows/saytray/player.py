@@ -7,6 +7,26 @@ import os, threading, wave, time, queue, collections
 import numpy as np
 from . import logs, sapi
 
+def markers_after_callback(pending, finished_speech, speech_left):
+    """A finished chime is not speech. Idle only when no speech is still buffered."""
+    pending = max(0, pending - finished_speech)
+    idle = finished_speech > 0 and pending == 0 and not speech_left
+    return pending, idle
+
+
+def queue_chime(buf, chimes, arr, gen):
+    """Put the preloaded chime at the front, rewound to the first sample.
+
+    An in-progress copy of the same tone is dropped and replaced, so a second
+    press restarts the sound instead of waiting behind one that may not be heard.
+    Speech buffers stay behind the chime, in their previous order.
+    """
+    restarted = any(a is arr for _, a, _ in buf)
+    kept = collections.deque((g, a, p) for g, a, p in buf if all(a is not c for c in chimes))
+    kept.appendleft((gen, arr, 0))
+    return kept, restarted
+
+
 SR = 22050
 PAD_S = 0.22
 LEAD_S = 0.35   # silence before the first chunk of a read (device wake-up)
@@ -67,6 +87,7 @@ class Player:
         self._stream_lock = threading.Lock()
         self.play_log = None
         self.on_idle = None
+        self._chime_pcm = {"start": self._tone("start"), "stop": self._tone("stop")}
         threading.Thread(target=self._run, daemon=True, name="player").start()
         # keep the output stream open (feeding silence when idle) so HDMI/Bluetooth outputs never sleep
         threading.Thread(target=self._keepalive, daemon=True, name="player-keepalive").start()
@@ -85,33 +106,42 @@ class Player:
         return self._items.empty() and not self._preparing and self._pending_markers == 0
 
 
-    def play_chime(self, kind="start"):
-        """Queue a short start (rising) or stop (falling) tone into the persistent output stream."""
+    def _tone(self, kind):
+        """Precomputed start (rising) or stop (falling) tone. The same array is replayed."""
         import math
-        sr = SR
         if kind == "start":
-            # ~120 ms rising soft sine: 520 Hz -> 780 Hz
             dur, f0, f1, amp = 0.12, 520.0, 780.0, 0.18
         else:
-            # softer ~100 ms falling: 620 Hz -> 380 Hz
             dur, f0, f1, amp = 0.10, 620.0, 380.0, 0.10
-        n = int(sr * dur)
+        n = int(SR * dur)
         t = np.linspace(0, dur, n, endpoint=False, dtype=np.float32)
         freq = f0 + (f1 - f0) * (t / dur)
-        phase = 2 * math.pi * np.cumsum(freq) / sr
-        env = np.sin(np.pi * np.clip(t / dur, 0, 1)).astype(np.float32)  # soft attack/release
+        phase = 2 * math.pi * np.cumsum(freq) / SR
+        env = np.sin(np.pi * np.clip(t / dur, 0, 1)).astype(np.float32)
         tone = (amp * env * np.sin(phase)).astype(np.float32)
-        # tiny lead/trail silence so stream never clicks
-        pad = np.zeros(int(sr * 0.02), np.float32)
-        a = np.concatenate([pad, tone, pad])
-        gen = self._gen  # don't cancel with stop(); chimes are independent of speech gen
+        pad = np.zeros(int(SR * 0.02), np.float32)
+        return np.concatenate([pad, tone, pad])
+
+    def _is_chime(self, arr):
+        return any(arr is clip for clip in self._chime_pcm.values())
+
+    def play_chime(self, kind="start"):
+        """Restart the preloaded tone at the head of the output buffer so a rapid repeat is heard."""
+        logs.event(f"chime {kind}: requested")
+        arr = self._chime_pcm.get(kind)
+        if arr is None:
+            logs.event(f"chime {kind}: started=False no preloaded buffer")
+            return False
+        thread = threading.current_thread().name
         try:
             self._ensure_stream()
-            with self._buf_lock:
-                self._buf.append((gen, a, 0))
-                # do not bump _pending_markers: chimes must not block "idle" / speech pump
         except Exception as e:
-            logs.event(f"chime error: {e!r}")
+            logs.event(f"chime {kind}: FAILED stream on thread {thread}: {e!r}")
+            return False
+        with self._buf_lock:
+            self._buf, restarted = queue_chime(self._buf, tuple(self._chime_pcm.values()), arr, self._gen)
+        logs.event(f"chime {kind}: {'rewound' if restarted else 'queued'} preloaded {len(arr)} samples on thread {thread}")
+        return True
 
     def new_generation(self):
         self._gen += 1
@@ -129,7 +159,8 @@ class Player:
         except queue.Empty:
             pass
         with self._buf_lock:
-            self._buf.clear()
+            # Speech stops; a dictation chime already in the buffer keeps playing.
+            self._buf = collections.deque(item for item in self._buf if self._is_chime(item[1]))
             self._pending_markers = 0
 
     def _log(self, s):
@@ -150,11 +181,12 @@ class Player:
                 pos += take
                 if pos >= len(arr):
                     self._buf.popleft()
-                    finished += 1
+                    if not self._is_chime(arr):
+                        finished += 1
                 else:
                     self._buf[0] = (gen, arr, pos)
-            self._pending_markers = max(0, self._pending_markers - finished)
-            idle_now = finished and self._pending_markers == 0
+            speech_left = any(not self._is_chime(item[1]) for item in self._buf)
+            self._pending_markers, idle_now = markers_after_callback(self._pending_markers, finished, speech_left)
         out[filled:] = 0
         if idle_now and self.on_idle and self._items.empty() and not self._preparing:
             threading.Thread(target=self.on_idle, daemon=True).start()
@@ -188,7 +220,7 @@ class Player:
                     self._log("PLAY " + os.path.basename(path))
                 else:
                     path = os.path.join(os.path.dirname(self.play_log or logs.LAST), f"sapi-{time.time_ns()}.wav")
-                    self._log("PLAY system: " + val)
+                    self._log(f"PLAY system: {len(val)} chars")
                     sapi.render(val, path, self.settings["sapi_voice"])
                 a, sr = _load(path)
                 with self._buf_lock:

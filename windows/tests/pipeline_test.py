@@ -7,7 +7,7 @@ from saytray.engine import PiperEngine
 from saytray.session import ReadSession
 
 out_json, files = sys.argv[1], sys.argv[2:]
-voice = os.environ.get("SB_VOICE", "en_US-ryan-high")
+voice = os.environ.get("SB_VOICE", "en_US-norman-medium")
 eng = PiperEngine()
 assert eng.ensure(voice), "voice missing"
 t0 = time.time(); eng.wait_ready(120); print(f"voice load+warmup {time.time() - t0:.2f}s")

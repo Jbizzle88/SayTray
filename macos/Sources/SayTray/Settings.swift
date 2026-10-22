@@ -44,18 +44,24 @@ final class AppState: ObservableObject {
   @Published var voiceID: String { didSet { d.set(voiceID, forKey: "voiceID") } }
   @Published var engine: String { didSet { d.set(engine, forKey: "engine"); onVoiceChanged?() } }
   @Published var piperVoice: String { didSet { d.set(piperVoice, forKey: "piperVoice"); onVoiceChanged?() } }
+  @Published var piperSpeaker: Int { didSet { d.set(piperSpeaker, forKey: "piperSpeaker"); onVoiceChanged?() } }
   @Published var readKey: HotKey { didSet { save(readKey, "readKey"); onHotKeysChanged?() } }
   @Published var dictateKey: HotKey { didSet { save(dictateKey, "dictateKey"); onHotKeysChanged?() } }
   @Published var isSpeaking = false { didSet { onStatusChanged?() } }
   @Published var isRecording = false { didSet { onStatusChanged?() } }
   @Published var chime: Bool { didSet { d.set(chime, forKey: "chime") } }
   init() {
-    speed = d.object(forKey: "speed") as? Double ?? 1.0
+    let rawSpeed = d.object(forKey: "speed") as? Double ?? 1.0
+    let clamped = rawSpeed.isFinite ? min(2.0, max(0.5, rawSpeed)) : 1.0
+    speed = clamped
+    if clamped != rawSpeed { d.set(clamped, forKey: "speed") }
     voiceID = d.string(forKey: "voiceID") ?? AppState.bestSystemVoice()
     engine = d.string(forKey: "engine") ?? "piper"
-    let pv = PiperEngine.installedVoices()
     let saved = d.string(forKey: "piperVoice") ?? ""
-    piperVoice = pv.contains(saved) ? saved : (pv.first { $0.contains("ryan-high") } ?? pv.first ?? "")
+    let resolved = VoiceCatalog.resolve(saved: saved)
+    piperVoice = resolved
+    let savedSpeaker = d.object(forKey: "piperSpeaker") as? Int ?? 0
+    piperSpeaker = VoiceCatalog.speakerID(voice: resolved, saved: savedSpeaker) ?? savedSpeaker
     readKey = AppState.load("readKey") ?? .readDefault
     dictateKey = AppState.load("dictateKey") ?? .dictateDefault
     chime = d.object(forKey: "chime") as? Bool ?? true
@@ -108,8 +114,10 @@ struct SpeedSlider: View {
 
 struct SettingsView: View {
   @ObservedObject var st = AppState.shared
+  @ObservedObject private var library = VoiceLibrary.shared
   @State private var tick = 0
   @State private var loginOn = SMAppService.mainApp.status == .enabled
+  @State private var deleteID: String?
   let testSpeak: (String) -> Void
   private let timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
   private var systemVoices: [(String, [AVSpeechSynthesisVoice])] {
@@ -123,7 +131,7 @@ struct SettingsView: View {
       Section("Shortcuts") {
         LabeledContent("Read selected text") { HotKeyRecorder(hotKey: $st.readKey) }
         LabeledContent("Dictate (hold)") { HotKeyRecorder(hotKey: $st.dictateKey) }
-        Text("Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor.").font(.caption).foregroundStyle(.secondary)
+        Text("Dictation is push-to-talk: hold the shortcut, speak, release to type at the cursor. You can keep holding the modifier and press the key again.").font(.caption).foregroundStyle(.secondary)
         Toggle("Play chime when dictation starts and stops", isOn: $st.chime)
       }
       Section("Voice") {
@@ -132,11 +140,12 @@ struct SettingsView: View {
           Text("macOS system voice").tag("system")
         }
         if st.engine == "piper" {
-          if PiperEngine.available {
-            Picker("Piper voice", selection: $st.piperVoice) {
-              ForEach(PiperEngine.installedVoices(), id: \.self) { Text(PiperEngine.pretty($0)).tag($0) }
-            }
-          } else {
+          if PiperEngine.runtimeReady || !VoiceCatalog.voices.isEmpty {
+            ForEach(VoiceCatalog.voices) { v in voiceRow(v) }
+            Text("Norman is the default. LJSpeech is included with setup. Other voices download here; sizes are the model files.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
+          if !PiperEngine.runtimeReady {
             Text("Piper isn't installed in ~/Library/Application Support/SayTray/piper; using the system voice.").font(.caption).foregroundStyle(.orange)
           }
         }
@@ -170,8 +179,69 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 520, height: 640)
-    .onReceive(timer) { _ in tick += 1 }
+    .frame(width: 560, height: 720)
+    .onReceive(timer) { _ in tick += 1; library.refresh() }
+    .alert("Delete this voice?", isPresented: Binding(get: { deleteID != nil }, set: { if !$0 { deleteID = nil } })) {
+      Button("Delete", role: .destructive) {
+        if let id = deleteID { library.delete(id) }
+        deleteID = nil
+      }
+      Button("Cancel", role: .cancel) { deleteID = nil }
+    } message: {
+      Text("\(VoiceCatalog.voice(deleteID ?? "")?.label ?? "This voice") will be removed. You can download it again.")
+    }
+  }
+  private func speakerBinding(_ v: CatalogVoice) -> Binding<Int> {
+    Binding(
+      get: { VoiceCatalog.speakerID(voice: v.id, saved: st.piperSpeaker) ?? v.speakers.first?.id ?? 0 },
+      set: { id in
+        if st.piperVoice != v.id { st.piperVoice = v.id }
+        st.piperSpeaker = id
+      }
+    )
+  }
+  @ViewBuilder
+  private func voiceRow(_ v: CatalogVoice) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(v.label)
+          Text(v.blurb).font(.caption).foregroundStyle(.secondary)
+        }
+        Spacer()
+        if library.installed.contains(v.id) {
+          if !v.speakers.isEmpty {
+            Picker("Speaker", selection: speakerBinding(v)) {
+              ForEach(v.speakers) { s in Text(s.label).tag(s.id) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 190)
+            .accessibilityLabel("Speaker for \(v.label)")
+          }
+          if st.piperVoice == v.id {
+            Text("Selected").foregroundStyle(.secondary)
+          } else {
+            Button("Use") { st.piperVoice = v.id }.controlSize(.small)
+          }
+          if v.id != VoiceCatalog.defaultVoiceID {
+            Button("Delete") { deleteID = v.id }.controlSize(.small)
+          }
+        } else if let msg = library.message[v.id], msg.hasPrefix("Downloading") || msg.hasPrefix("Starting") {
+          Text(msg).font(.caption).foregroundStyle(.secondary)
+          Button("Cancel") { library.cancel(v.id) }.controlSize(.small)
+        } else {
+          Button("Download \(v.sizeLabel)") { library.download(v.id) }.controlSize(.small)
+        }
+      }
+      if let frac = library.fraction[v.id], let msg = library.message[v.id],
+         msg.hasPrefix("Downloading") || msg.hasPrefix("Starting") {
+        ProgressView(value: frac)
+      }
+      if let msg = library.message[v.id], msg.hasPrefix("Download failed") || msg.hasPrefix("Could not") || msg == "Wait for the download to finish" {
+        Text(msg).font(.caption).foregroundStyle(.orange)
+      }
+    }
   }
   private func row(_ title: String, _ ok: Bool, _ action: @escaping () -> Void) -> some View {
     HStack {

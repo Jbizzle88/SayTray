@@ -15,8 +15,10 @@ sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 voice = PiperVoice.load(sys.argv[1])
 FIELDS = {f.name for f in dataclasses.fields(SynthesisConfig)}
 
-def config(ns, nw):
+def config(ns, nw, speaker_id=None):
     want = {"length_scale": 1.0, "noise_scale": ns, "noise_w_scale": nw, "noise_w": nw}
+    if speaker_id is not None:
+        want["speaker_id"] = int(speaker_id)
     return SynthesisConfig(**{k: v for k, v in want.items() if k in FIELDS})
 
 # count real phones only: skip spaces, punctuation, stress and length marks
@@ -70,7 +72,7 @@ while True:
     tmp = path + ".part"
     try:
         with wave.open(tmp, "wb") as wf:
-            voice.synthesize_wav(m["text"], wf, syn_config=config(float(m.get("noise_scale", 0.5)), float(m.get("noise_w", 0.6))))
+            voice.synthesize_wav(m["text"], wf, syn_config=config(float(m.get("noise_scale", 0.5)), float(m.get("noise_w", 0.6)), m.get("speaker_id")))
         with wave.open(tmp, "rb") as r:
             secs = r.getnframes() / float(r.getframerate())
         os.replace(tmp, path)
