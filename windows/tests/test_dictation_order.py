@@ -45,7 +45,14 @@ class _Model:
 
     def transcribe(self, samples, **kw):
         self.n += 1
-        return [_Seg(f"w{self.n}", len(samples))], None
+        self.last_kw = kw
+        seg = _Seg(f"w{self.n}", len(samples))
+        rms = float(np.sqrt(np.mean(np.square(np.asarray(samples, dtype=np.float32)))))
+        if rms < 0.01:
+            seg.no_speech_prob = 0.95
+            seg.avg_logprob = -1.2
+            seg.text = "noise"
+        return [seg], None
 
 
 inserted = []
@@ -72,11 +79,14 @@ try:
     fresh._gen = 3
     calls = fresh._model.n
     fresh._transcribe(np.full(8000, 0.002, np.float32), 3)
-    check(len(inserted) == before and fresh._model.n == calls, "short quiet noise is not sent to Whisper")
-    check(any("didn't hear anything" in n for n in notices), f"dropped silence is announced: {notices}")
+    check(fresh._model.n == calls + 1 and len(inserted) == before, "quiet audio reaches Whisper and a no-speech result is not typed")
+    check(fresh._model.last_kw.get("vad_filter") is True and fresh._model.last_kw.get("temperature") == 0.0,
+          f"quiet audio uses VAD and temperature 0: {fresh._model.last_kw}")
+    fresh._transcribe(np.zeros(int(SR * 2), np.float32), 3)
+    check(any("didn't hear anything" in n for n in notices), f"a longer silence is announced: {notices}")
     fresh._gen = 9
     fresh._transcribe(np.full(11200, 0.002, np.float32), 4)
-    check(fresh._model.n == calls and len(inserted) == before, "a newer tap supersedes an older noise clip")
+    check(fresh._model.n == calls + 1 and len(inserted) == before, "a newer tap supersedes an older noise clip")
     fresh._closed = True
     stayed = len(inserted)
     fresh._transcribe(np.full(8000, 0.08, np.float32), 1)

@@ -59,6 +59,8 @@ Add-Suite -Name "voice catalog" -Script (Join-Path $root "tests\test_voices.py")
 Add-Suite -Name "chord" -Script (Join-Path $root "tests\test_chord.py")
 Add-Suite -Name "venv setup" -Script (Join-Path $root "tests\test_setup_venv.py")
 Add-Suite -Name "dictation flow" -Script (Join-Path $root "tests\test_dictation_flow.py")
+Add-Suite -Name "dictation order" -Script (Join-Path $root "tests\test_dictation_order.py")
+Add-Suite -Name "requirement wheels" -Script (Join-Path $root "tests\test_requirements_wheels.py")
 
 $files = @()
 $files += @(Get-ChildItem -Path (Join-Path $root "tests\corpus\*.txt") -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })

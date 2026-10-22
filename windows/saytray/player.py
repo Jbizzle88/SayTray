@@ -193,8 +193,11 @@ class Player:
 
     def _ensure_stream(self):
         import sounddevice as sd
-        with self._stream_lock:
-            self._ensure_stream_locked(sd)
+        from .portaudio import lock as portaudio_lock
+        # Held across open so dictation cannot restart PortAudio underneath this stream.
+        with portaudio_lock():
+            with self._stream_lock:
+                self._ensure_stream_locked(sd)
 
     def _ensure_stream_locked(self, sd):
         if self._stream is None or not self._stream.active:
