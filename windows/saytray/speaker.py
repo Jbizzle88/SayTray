@@ -49,7 +49,7 @@ class Speaker:
             return False
         with self._lock:
             self._read += 1
-            d = logs.LAST
+            d = logs.last_dir()
             shutil.rmtree(d, ignore_errors=True)
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, "input.txt"), "w", encoding="utf-8") as f:

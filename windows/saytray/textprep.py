@@ -207,8 +207,15 @@ def split_in_half(s: str):
 
 class BabbleGuard:
     """Detects Piper babble/skip from audio duration vs. phoneme count (same thresholds as macOS).
-    Calibrated: normal speech 0.054-0.103 s/phoneme; confirmed babble case 0.040."""
+
+    Calibrated: normal speech 0.054-0.103 s/phoneme; confirmed babble/skip ~0.030-0.040.
+    A line under SHORT_WORDS (the merged "OK. Yes! No. Hi there." chunk is 5 words and
+    17 phonemes) is not failed for being too slow per phoneme. Norman pauses between
+    those short sentences, and that alone used to look like babble and fall back to the
+    system voice. Seconds per word still rejects a drone, and skipped speech still fails.
+    """
     MIN_SPP, MAX_SPP, MIN_SPW, MAX_SPW = 0.043, 0.16, 0.12, 1.0
+    SHORT_WORDS = 8
 
     @classmethod
     def check(cls, text: str, seconds: float, phonemes: int):
@@ -220,7 +227,7 @@ class BabbleGuard:
             reason = "empty audio"
         elif phonemes >= 12 and spp < cls.MIN_SPP:
             reason = "too fast for its phonemes (skipped speech)"
-        elif phonemes >= 12 and spp > cls.MAX_SPP:
+        elif phonemes >= 12 and spp > cls.MAX_SPP and w >= cls.SHORT_WORDS:
             reason = "too slow for its phonemes (babble)"
         elif w >= 4 and spw < cls.MIN_SPW:
             reason = "too short per word"

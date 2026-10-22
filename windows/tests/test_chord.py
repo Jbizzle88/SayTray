@@ -1,5 +1,7 @@
 """Hold-chord tracker: modifier stays down, the main key can go up and down again."""
-import os, sys
+import os, sys, tempfile
+if not os.environ.get("SAYTRAY_LOG_DIR"):
+    os.environ["SAYTRAY_LOG_DIR"] = tempfile.mkdtemp(prefix="saytray-test-logs-")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from saytray.chord import ChordTracker, ModifierArm
 
