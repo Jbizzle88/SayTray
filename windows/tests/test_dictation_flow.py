@@ -411,15 +411,15 @@ check(not slice_is_silent(np.full(1600, 0.002, np.float32), 16000), "quiet speec
 check(slice_is_silent(np.full(1600, 0.0004, np.float32), 16000), "audio under 0.001 is silence")
 check(not slice_is_silent(np.full(1600, 0.05, np.float32), 16000), "audible audio is kept")
 from saytray.dictation import classify_input, should_prewarm
-check(idle_seconds_for_input("MacBook Pro Microphone") == 600, "a built-in mic stays warm for 10 minutes")
-check(idle_seconds_for_input("AirPods Pro") == 20, "Bluetooth is released quickly")
-check(idle_seconds_for_input("Headset (Hands-Free AG Audio)") == 20, "hands-free is released quickly")
-check(idle_seconds_for_input("Headset (Galaxy Buds2 Pro)") == 20, "a Windows headset name is hands-free")
-check(idle_seconds_for_input("Headset (Jabra Elite 85t Hands-") == 20, "a truncated headset name is hands-free")
-check(idle_seconds_for_input("USB Headset") == 600, "a wired headset stays warm")
+check(idle_seconds_for_input("MacBook Pro Microphone") == 3, "a built-in mic is released after about 3 seconds")
+check(idle_seconds_for_input("AirPods Pro") == 3, "Bluetooth is released after about 3 seconds")
+check(idle_seconds_for_input("Headset (Hands-Free AG Audio)") == 3, "hands-free is released after about 3 seconds")
+check(idle_seconds_for_input("Headset (Galaxy Buds2 Pro)") == 3, "a Windows headset name is released after about 3 seconds")
+check(idle_seconds_for_input("Headset (Jabra Elite 85t Hands-") == 3, "a truncated headset name is released after about 3 seconds")
+check(idle_seconds_for_input("USB Headset") == 3, "a wired headset is released after about 3 seconds")
 check(classify_input("Mic", endpoint_id=r"\\?\BTHHFENUM#x") == "hands-free", "BTHHFENUM is hands-free even with a plain name")
 check(classify_input("Mic", endpoint_id=r"\\?\BTHENUM#x") == "hands-free", "BTHENUM is hands-free")
-check(idle_seconds_for_input("") == 20 and not input_releases_quickly(""), "an unknown input uses the short timeout")
+check(idle_seconds_for_input("") == 3 and not input_releases_quickly(""), "an unknown input is released after about 3 seconds and is not called hands-free")
 check(should_prewarm("wired", False) is True, "a closed wired mic can pre-warm")
 check(should_prewarm("hands-free", False) is False, "Bluetooth waits for the main key")
 check(should_prewarm("unknown", False) is False, "an unknown input waits for the main key")
@@ -446,6 +446,8 @@ def _bare_dictation(kind, active):
     fresh._stream = _Live() if active else None
     fresh._idle_timer = None
     fresh._idle_token = None
+    fresh._modifier_held = False
+    fresh._ring = Ring(8)
     return fresh
 
 wired_open = _bare_dictation("wired", True)
@@ -465,9 +467,59 @@ armed._phase = "idle"
 armed._arm_mic_idle()
 second_timer = armed._idle_timer
 check(second_timer is not first_timer and first_timer.finished.is_set(), "a new idle timer replaces the previous one")
+check(abs(second_timer.interval - 3) < 1e-6, f"the idle window is 3 seconds, not 10 minutes: {second_timer.interval}")
 second_timer.cancel()
 if first_timer.is_alive():
     first_timer.cancel()
+
+class _Stream:
+    def __init__(self):
+        self.events = []
+        self.active = True
+    def stop(self):
+        self.events.append("stop")
+        self.active = False
+    def close(self):
+        self.events.append("close")
+
+released = _bare_dictation("wired", False)
+stream = _Stream()
+released._stream = stream
+released._idle_token = 1.0
+released._close_if_idle(1.0)
+check(released._stream is None and stream.events == ["stop", "close"], f"release stops and closes the input stream: {stream.events}")
+held_open = _bare_dictation("hands-free", False)
+held_stream = _Stream()
+held_open._stream = held_stream
+held_open._modifier_held = True
+held_open._idle_token = 2.0
+held_open._close_if_idle(2.0)
+check(held_open._stream is held_stream and held_stream.events == [], "a held modifier does not stop the input stream")
+session = _bare_dictation("wired", True)
+session.set_modifier_session(True)
+check(session._modifier_held and session._idle_timer is None, "a modifier session does not start the release timer")
+session._arm_mic_idle()
+check(session._idle_timer is None, "idle arming waits while the modifier is held")
+session._phase = "recording"
+session.set_modifier_session(False)
+check(session._idle_timer is None and not session._modifier_held, "letting the modifier go during a hold does not release yet")
+session._phase = "idle"
+session.set_modifier_session(False)
+release_timer = session._idle_timer
+check(release_timer is not None and abs(release_timer.interval - 3) < 1e-6, "letting the modifier go releases the mic after 3 seconds")
+release_timer.cancel()
+
+early = np.arange(int(16000 * 0.20), dtype=np.float32)
+cold = Ring(int(16000 * 0.45))
+cold.push(early)
+pre = cold.snapshot()
+live = np.full(160, 0.5, np.float32)
+audio = np.concatenate([pre, live] if pre.size else [live])
+check(pre.size == early.size and float(audio[0]) == float(early[0]) and float(audio[pre.size]) == 0.5, "a cold start keeps every sample buffered from engine start")
+long_wait = Ring(int(16000 * 0.45))
+long_wait.push(np.arange(16000, dtype=np.float32))
+snap = long_wait.snapshot()
+check(snap.size == int(16000 * 0.45) and float(snap[0]) == 16000 - snap.size, "audio older than the pre-roll is not kept")
 check(hotkey_ok("ctrl+alt+ö") and hotkey_ok("ctrl+alt+é"), "a layout-specific hotkey is kept")
 import types
 _kb = types.ModuleType("keyboard")

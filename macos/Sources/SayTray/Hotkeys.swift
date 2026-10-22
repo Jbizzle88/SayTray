@@ -22,6 +22,8 @@ final class HotKeyCenter {
   private var missCount: [UInt32: Int] = [:]
   private var watch: Timer?
   private var suspended = false
+  /// True while the dictate chord's modifiers are held, including between rapid presses.
+  var onModifierSession: ((Bool) -> Void)?
 
   private init() {
     var types = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
@@ -95,10 +97,17 @@ final class HotKeyCenter {
           if !armedMods.contains(id) {
             armedMods.insert(id)
             scheduleArm(id)
+            Log.event("hotkey \(s.key.label): modifier session began")
+            onModifierSession?(true)
           }
         } else {
+          let ended = armedMods.contains(id)
           armedMods.remove(id)
           cancelArm()
+          if ended {
+            Log.event("hotkey \(s.key.label): modifier session ended")
+            onModifierSession?(false)
+          }
         }
         if holdingIds.contains(id), !modifiersMatch(s.key, e.modifierFlags) { noteUp(id) }
       default:

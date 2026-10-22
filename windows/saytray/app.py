@@ -112,6 +112,7 @@ class App:
             lambda: self._keys.submit(self.dictation.stop),
             on_arm=lambda: self._keys.submit(self.dictation.warm),
             on_unusable=unusable,
+            on_modifier=lambda held: self._keys.submit(lambda: self.dictation.set_modifier_session(held)),
         )
 
     def _saved(self):

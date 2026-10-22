@@ -5,10 +5,12 @@ import CoreAudio
 import SayTrayCore
 import SBObjC
 
-/// Built-in and wired inputs stay warm for about 10 minutes. Bluetooth and hands-free
-/// inputs are released quickly so headphone audio is not stuck in a call profile.
+/// The microphone is released about 3 seconds after a dictation so the menu-bar
+/// indicator turns off. It stays open while the dictate modifier is held.
+/// "hands-free" is still classified so a headset is not opened just because Option was tapped.
 enum InputRoute {
-  /// "wired" keeps the long pre-roll. "hands-free" and "unknown" use the short timeout.
+  static let releaseDelay: TimeInterval = 3
+
   static func kind() -> String {
     let device = defaultDevice()
     if device == 0 { return "unknown" }
@@ -24,7 +26,7 @@ enum InputRoute {
 
   static func releasesQuickly() -> Bool { kind() != "wired" }
 
-  static func idleSeconds() -> TimeInterval { kind() == "wired" ? 600 : 20 }
+  static func idleSeconds() -> TimeInterval { releaseDelay }
 
   static func describe() -> String {
     let name = defaultName()
@@ -114,6 +116,12 @@ final class Dictation {
   private var graceGen = 0
   private var shuttingDown = false
   private var idleWork: DispatchWorkItem?
+  /// Dictate modifier (Option, or Ctrl+Alt on Windows) is physically down.
+  private var modifierHeld = false
+  /// When the input engine last reached the running state. A young engine gets a delayed chime.
+  private var engineStartedAt: Date?
+  /// Give a just-started input engine this long before the start chime, so a route change does not eat it.
+  private let chimeSettle: TimeInterval = 0.40
   private var jobs: [Job] = []
   private var pumping = false
   private var loggedCopyFail = false
@@ -159,9 +167,26 @@ final class Dictation {
       Log.event("dictation: pre-roll start failed \(exc ?? "") \(String(describing: startErr))")
       return false
     }
+    engineStartedAt = Date()
     Log.event("dictation: pre-roll engine running (\(InputRoute.describe()))")
     if phase == .idle { scheduleMicIdle() }
     return true
+  }
+
+  /// Keep an already-open mic for the whole modifier hold, including the gaps between rapid dictations.
+  func setModifierSession(_ held: Bool) {
+    if !Thread.isMainThread {
+      DispatchQueue.main.async { self.setModifierSession(held) }
+      return
+    }
+    modifierHeld = held
+    if held {
+      idleWork?.cancel()
+      idleWork = nil
+      Log.event("dictation: mic stays open while the dictate modifier is held")
+    } else if phase == .idle, !capturing, !shuttingDown {
+      scheduleMicIdle()
+    }
   }
 
   func start() {
@@ -188,14 +213,13 @@ final class Dictation {
     generation += 1
     setRecordingUI(true)
     let gen = generation
-    let justStarted = warmMicrophone()
-    if justStarted {
-      phase = .arming
-      Log.event("dictation: engine just started; playing the chime on the next turn")
-      DispatchQueue.main.async { [weak self] in self?.engage(gen) }
-    } else {
-      engage(gen)
+    // Start capture in this turn. Samples that arrive while the engine is spinning up
+    // sit in the pre-roll ring and are copied into the clip, so a cold Option-then-Space
+    // still includes the beginning.
+    if warmMicrophone() {
+      Log.event("dictation: engine just started; capture includes audio from engine start")
     }
+    engage(gen)
   }
 
   func stop() {
@@ -213,7 +237,7 @@ final class Dictation {
       graceGen = generation
       phase = .grace
       setRecordingUI(false)
-      playChime("stop")
+      requestChime("stop", after: 0)
       let gen = graceGen
       DispatchQueue.main.asyncAfter(deadline: .now() + graceSeconds) { [weak self] in
         self?.endGrace(gen)
@@ -251,15 +275,24 @@ final class Dictation {
 
   private func scheduleMicIdle() {
     idleWork?.cancel()
+    idleWork = nil
+    if modifierHeld {
+      Log.event("dictation: mic stays open while the dictate modifier is held")
+      return
+    }
+    guard engine != nil else { return }
     let seconds = InputRoute.idleSeconds()
     let work = DispatchWorkItem { [weak self] in self?.releaseMicrophoneIfIdle() }
     idleWork = work
-    Log.event("dictation: mic stays open for \(Int(seconds))s (\(InputRoute.describe()))")
+    Log.event("dictation: mic stays open for \(Int(seconds))s then releases (\(InputRoute.describe()))")
     DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
   }
 
   private func releaseMicrophoneIfIdle() {
-    guard phase == .idle, !shuttingDown, !capturing else { return }
+    guard phase == .idle, !shuttingDown, !capturing, !modifierHeld else {
+      if modifierHeld { Log.event("dictation: release skipped; dictate modifier is held") }
+      return
+    }
     guard engine != nil else { return }
     if let eng = engine {
       _ = SBTryObjC {
@@ -268,6 +301,7 @@ final class Dictation {
       }
     }
     engine = nil
+    engineStartedAt = nil
     if let o = configObs {
       NotificationCenter.default.removeObserver(o)
       configObs = nil
@@ -276,13 +310,15 @@ final class Dictation {
     ring.removeAll()
     ringSeconds = 0
     audioLock.unlock()
-    Log.event("dictation: microphone released after idle (\(InputRoute.describe()))")
+    Log.event("dictation: microphone released after idle; input tap removed and engine stopped (\(InputRoute.describe()))")
   }
 
   /// Stop the microphone and drop any clip still being recognized. Does not type.
   func shutdown() {
     let work = {
       self.shuttingDown = true
+      self.idleWork?.cancel()
+      self.idleWork = nil
       self.generation += 1
       self.audioLock.lock()
       self.capturing = false
@@ -321,12 +357,6 @@ final class Dictation {
       NSSound.beep()
       return
     }
-    let chimeLabel: String
-    switch playChime("start") {
-    case .some(true): chimeLabel = "played"
-    case .some(false): chimeLabel = "FAILED"
-    case .none: chimeLabel = "off"
-    }
     audioLock.lock()
     let pre = ringSeconds
     session = ring.map { $0.buffer }
@@ -336,12 +366,16 @@ final class Dictation {
     audioLock.unlock()
     phase = .recording
     setRecordingUI(true)
+    let age = Date().timeIntervalSince(engineStartedAt ?? .distantPast)
+    let delay = max(0, chimeSettle - age)
+    requestChime("start", after: delay, gen: gen)
+    let chimeLabel = delay > 0.02 ? "deferred" : "now"
     Log.event("dictation: capture gen \(gen) chime=\(chimeLabel) pre-roll \(Int((pre * 1000).rounded()))ms input=\(InputRoute.describe())")
   }
 
   private func handleRouteChange() {
     guard let eng = engine else { return }
-    Log.event("dictation: audio route changed")
+    Log.event("dictation: audio route changed (a chime playing now may be interrupted)")
     _ = SBTryObjC { eng.inputNode.removeTap(onBus: 0) }
     guard installTap(eng) else {
       Log.event("dictation: tap re-install failed after route change")
@@ -693,13 +727,30 @@ final class Dictation {
     AppState.shared.isRecording = on
   }
 
-  /// nil when chimes are turned off, otherwise whether playback started.
-  @discardableResult
-  private func playChime(_ kind: String) -> Bool? {
+  /// Log the request immediately. Playback of a start chime waits until a young input engine has settled.
+  private func requestChime(_ kind: String, after delay: TimeInterval, gen: Int? = nil) {
     guard AppState.shared.chime else {
-      Log.event("dictation: \(kind) chime skipped (disabled)")
-      return nil
+      Log.event("dictation: \(kind) chime requested but skipped (disabled)")
+      return
     }
-    return Chime.play(kind)
+    Log.event("dictation: \(kind) chime requested")
+    let play = { [weak self] in
+      guard let self else { return }
+      if kind == "start" {
+        guard let gen, gen == self.generation, self.phase == .recording else {
+          Log.event("dictation: start chime cancelled before playback")
+          return
+        }
+      }
+      let ok = Chime.play(kind)
+      Log.event("dictation: \(kind) chime started=\(ok)")
+    }
+    if delay > 0.02 {
+      let ms = Int((delay * 1000).rounded())
+      Log.event("dictation: \(kind) chime waiting \(ms)ms for the input engine to settle")
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: play)
+    } else {
+      play()
+    }
   }
 }

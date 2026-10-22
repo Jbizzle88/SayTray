@@ -1,10 +1,12 @@
 """Push-to-talk dictation: record while the hotkey is held, transcribe locally with faster-whisper
 (base.en, CPU int8), type the result at the cursor.
 
-The input stream stays open and keeps ~450 ms of audio. The session itself is every
-sample from key-down to key-up, with no duration cap. Long clips are transcribed in
-30 s pieces (under one Whisper window). A piece whose transcript does not cover it
-is halved and transcribed again, then the pieces are concatenated in order.
+The input stream keeps ~450 ms of audio and is closed about 3 seconds after a
+dictation, so the OS mic indicator turns off. It stays open while the dictate
+modifiers are held. The session itself is every sample from key-down to key-up,
+with no duration cap. Long clips are transcribed in 30 s pieces (under one Whisper
+window). A piece whose transcript does not cover it is halved and transcribed again,
+then the pieces are concatenated in order.
 """
 import os, threading, time
 import numpy as np
@@ -18,8 +20,8 @@ SR = 16000
 _PRE_ROLL_S = 0.45
 _MIN_LIVE_S = 0.15
 _GRACE_S = 0.25          # keep capturing briefly after key-up so the last word is not lost
-_IDLE_MIC_WIRED_S = 600.0    # built-in and wired inputs stay warm so the next hold has a pre-roll
-_IDLE_MIC_HANDSFREE_S = 20.0 # Bluetooth / hands-free is released quickly so headphone audio stays usable
+_IDLE_MIC_S = 3.0           # every input is released soon after a hold so the mic indicator turns off
+_CHIME_SETTLE_S = 0.40       # a just-opened stream waits this long before the start chime
 _SILENCE_RMS = 0.001
 
 
@@ -81,9 +83,8 @@ def input_releases_quickly(name="", endpoint_id="", instance_id=""):
 
 
 def idle_seconds_for_input(name="", endpoint_id="", instance_id=""):
-    if classify_input(name, endpoint_id, instance_id) == "wired":
-        return _IDLE_MIC_WIRED_S
-    return _IDLE_MIC_HANDSFREE_S
+    """Every input is released after a few seconds. The OS mic light stays on while the stream is open."""
+    return _IDLE_MIC_S
 
 
 def should_prewarm(kind, already_open):
@@ -289,6 +290,7 @@ class Dictation:
         self._endpoint_id = ""
         self._instance_id = ""
         self._idle_timer = None
+        self._modifier_held = False
         threading.Thread(target=self._load_model, daemon=True, name="whisper-load").start()
         threading.Thread(target=self._open_warm, daemon=True, name="dictation-warm").start()
 
@@ -443,13 +445,18 @@ class Dictation:
             logs.event("dictation: microphone not running")
             self._state()
             return
-        # Chime after the stream is already up, and without waiting to record.
-        # A cold open happened before this call returns to the chime, so the device
-        # change and the tone are not in the same moment on a warm microphone.
-        chime_ok = self._chime("start")
+        # Capture is already running. A stream that just opened can reroute output,
+        # so the start chime waits until that settles. A warm mic plays it now.
         if just_opened:
-            logs.event("dictation: microphone was just opened before the chime")
-        label = {True: "played", False: "FAILED"}.get(chime_ok, "off")
+            logs.event("dictation: microphone was just opened; start chime waits for the stream to settle")
+            delay = max(0.0, _CHIME_SETTLE_S)
+            timer = threading.Timer(delay, self._chime_if_recording, args=("start", gen))
+            timer.daemon = True
+            timer.start()
+            label = "deferred"
+        else:
+            chime_ok = self._chime("start")
+            label = {True: "played", False: "FAILED"}.get(chime_ok, "off")
         logs.event(
             f"dictation: capture gen {gen} chime={label} pre-roll {pre_s * 1000:.0f}ms "
             f"input={self._input_name or 'unknown'!r} kind={self._input_kind}"
@@ -502,38 +509,72 @@ class Dictation:
             return
         threading.Thread(target=self._finish, args=(audio, gen), daemon=True, name="dictation-stop").start()
 
-    def _arm_mic_idle(self):
+    def set_modifier_session(self, held):
+        """Keep the mic open for the whole modifier hold, including gaps between rapid dictations."""
+        with self._lock:
+            self._modifier_held = bool(held)
+            phase = self._phase
+            closed = self._closed
+        if held:
+            self._cancel_idle_timer()
+            logs.event("dictation: mic stays open while the dictate modifier is held")
+        elif not closed and phase == "idle":
+            self._arm_mic_idle()
+
+    def _cancel_idle_timer(self):
         old = self._idle_timer
         self._idle_timer = None
         if old is not None:
             old.cancel()
-        token = time.monotonic()
-        name = self._input_name
-        kind = self._input_kind or classify_input(name, self._endpoint_id, self._instance_id)
-        seconds = _IDLE_MIC_WIRED_S if kind == "wired" else _IDLE_MIC_HANDSFREE_S
-        self._idle_token = token
-        self._input_kind = kind
-        logs.event(f"dictation: mic stays open for {seconds:.0f}s ({kind}, {name or 'unknown input'})")
+
+    def _arm_mic_idle(self):
+        self._cancel_idle_timer()
+        with self._lock:
+            if self._closed or self._modifier_held or self._phase != "idle":
+                self._idle_token = None
+                arm = False
+                held = self._modifier_held
+            else:
+                arm = True
+                held = False
+                token = time.monotonic()
+                self._idle_token = token
+                name = self._input_name
+                kind = self._input_kind or classify_input(name, self._endpoint_id, self._instance_id)
+                self._input_kind = kind
+                seconds = idle_seconds_for_input(name, self._endpoint_id, self._instance_id)
+        if not arm:
+            if held:
+                logs.event("dictation: mic stays open while the dictate modifier is held")
+            return
+        logs.event(f"dictation: mic stays open for {seconds:.0f}s then releases ({kind}, {name or 'unknown input'})")
         timer = threading.Timer(seconds, self._close_if_idle, args=(token,))
         timer.daemon = True
-        self._idle_timer = timer
+        with self._lock:
+            if self._modifier_held or self._phase != "idle" or self._idle_token != token or self._closed:
+                return
+            self._idle_timer = timer
         timer.start()
 
     def _close_if_idle(self, token):
         with self._lock:
-            if self._closed or token != self._idle_token or self._phase != "idle":
+            if self._closed or token != self._idle_token or self._phase != "idle" or self._modifier_held:
+                if self._modifier_held:
+                    logs.event("dictation: release skipped; dictate modifier is held")
                 return
             stream = self._stream
             self._stream = None
             self._ring.clear()
-            name = self._input_name
         if stream is not None:
             try:
                 stream.stop()
+            except Exception:
+                pass
+            try:
                 stream.close()
             except Exception:
                 pass
-            logs.event(f"dictation: microphone released after idle ({self._input_kind})")
+            logs.event(f"dictation: microphone released after idle; input stream stopped and closed ({self._input_kind})")
 
     def _notify(self, message):
         logs.event("dictation: " + message)
@@ -545,6 +586,7 @@ class Dictation:
 
     def shutdown(self):
         """Close the microphone and drop the capture. Do not transcribe or type."""
+        self._cancel_idle_timer()
         with self._lock:
             self._closed = True
             self._gen += 1
@@ -575,20 +617,27 @@ class Dictation:
                     self._phase = "idle"
             self._arm_mic_idle()
 
+    def _chime_if_recording(self, kind, gen):
+        with self._lock:
+            if self._gen != gen or self._phase != "recording":
+                logs.event(f"dictation: {kind} chime cancelled before playback")
+                return
+        self._chime(kind)
+
     def _chime(self, kind):
         chime_on = True if self.settings is None else coerce_bool(self.settings["chime"], True)
         if not chime_on or self.player is None:
-            logs.event(f"dictation: {kind} chime skipped")
+            logs.event(f"dictation: {kind} chime requested but skipped")
             return None
+        logs.event(f"dictation: {kind} chime requested")
         try:
             ok = self.player.play_chime(kind)
         except Exception as e:
-            logs.event(f"dictation: {kind} chime FAILED {e!r}")
+            logs.event(f"dictation: {kind} chime started=False FAILED {e!r}")
             return False
-        if ok is False:
-            logs.event(f"dictation: {kind} chime FAILED")
-            return False
-        return True
+        started = bool(ok)
+        logs.event(f"dictation: {kind} chime started={started}")
+        return started
 
     def _transcribe(self, audio, gen):
         dur = len(audio) / SR
