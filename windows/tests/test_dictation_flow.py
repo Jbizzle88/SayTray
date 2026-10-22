@@ -1,6 +1,8 @@
 """Spacing, pre-roll, long-clip splits, and chime rewind. No microphone required."""
-import collections, os, sys
+import collections, os, sys, tempfile
 import numpy as np
+if not os.environ.get("SAYTRAY_LOG_DIR"):
+    os.environ["SAYTRAY_LOG_DIR"] = tempfile.mkdtemp(prefix="saytray-test-logs-")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from saytray.spacing import apply, dedupe_boundary, join_overlapped, merge, join_segments, prepare, simulate_inserts
 from saytray.preroll import Ring, overlapped_pieces, split_pcm
@@ -248,7 +250,12 @@ import saytray.selection as sel
 import saytray.dictation as dmod
 from saytray.dictation import Dictation, idle_seconds_for_input, input_releases_quickly, keep_whisper_segment, slice_is_silent
 from saytray.hotkeys import HotkeySerial
-from saytray.logs import purge_legacy_text_logs, rotate_if_big
+from saytray.logs import event as log_event, logs_dir, purge_legacy_text_logs, rotate_if_big
+log_event("dictation: test marker")
+_log_path = os.path.join(logs_dir(), "events.log")
+check(os.path.abspath(os.path.dirname(_log_path)) == os.path.abspath(os.environ["SAYTRAY_LOG_DIR"]),
+      "dictation tests write events.log under SAYTRAY_LOG_DIR")
+check("test marker" in open(_log_path, encoding="utf-8").read(), "the test marker is in the temp events log")
 from saytray.player import markers_after_callback
 
 steps = split_typing_steps(unicode_events("hi\nthere"))

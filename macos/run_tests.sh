@@ -2,6 +2,8 @@
 # 1) TextPrep unit + corpus tests  2) full pipeline (real Piper + guard) over corpus and past problem texts.
 set -uo pipefail
 cd "$(dirname "$0")"
+export SAYTRAY_LOG_DIR="${SAYTRAY_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/saytray-test-logs.XXXXXX")}"
+echo "Test logs: $SAYTRAY_LOG_DIR"
 python3 ../windows/tests/test_voices.py
 VOICES=$?
 python3 ../windows/tests/test_chord.py

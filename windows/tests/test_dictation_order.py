@@ -3,9 +3,11 @@
 Older harnesses used amplitudes of 0.001 to 0.003. Those sit on the silence
 gate, so only the louder tail was typed. These clips are 0.05 to 0.08.
 """
-import os, sys, threading
+import os, sys, tempfile, threading
 import numpy as np
 
+if not os.environ.get("SAYTRAY_LOG_DIR"):
+    os.environ["SAYTRAY_LOG_DIR"] = tempfile.mkdtemp(prefix="saytray-test-logs-")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import saytray.dictation as dmod
 from saytray.dictation import Dictation, SR, slice_is_silent
