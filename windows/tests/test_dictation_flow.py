@@ -351,6 +351,71 @@ finally:
     sel._wait_mods_released = _old_wait2
     sel._cursor_previous = _old_prev
 
+_old_block = sel._alt_blocks_unicode
+_old_wait_alt = sel._wait_alt_clear
+_old_mods3 = sel._modifiers_down
+_old_leave3 = sel._leave_on_clipboard
+_old_uni3 = sel._send_unicode
+_old_paste3 = sel._paste_text
+_old_prev3 = sel._cursor_previous
+_old_fg = sel._foreground_hwnd
+_old_notice3 = sel.on_notice
+try:
+    left = []
+    sent = []
+    notices = []
+    sel.on_notice = notices.append
+    sel._alt_blocks_unicode = lambda: True
+    sel._wait_alt_clear = lambda timeout=2.0: False
+    sel._modifiers_down = lambda: True
+    sel._leave_on_clipboard = left.append
+    sel._send_unicode = lambda text: sent.append(text) or len(text)
+    ok = sel.type_text("alt held text")
+    check(ok is False and sent == [] and left == ["alt held text"], f"Alt alone does not report a typed result: {ok} {sent} {left}")
+    check(any("Alt" in n for n in notices), f"the user is told Alt blocked typing: {notices}")
+    sel._alt_blocks_unicode = lambda: False
+    check(_old_wait_alt(0.05) is True, "typing proceeds once Alt is clear")
+    pasted = []
+    sel._modifiers_down = lambda: False
+    sel._paste_text = pasted.append
+    sel._cursor_previous = lambda: None
+    sel._foreground_hwnd = lambda: 7
+    sel._remember_insert("Hello there.")
+    sel._last_insert_hwnd = 7
+    sel.insert_dictation("next words")
+    check(pasted == [" next words"], f"the same window's recent insert supplies the leading space: {pasted}")
+    pasted.clear()
+    sel._last_insert_hwnd = 4
+    sel.insert_dictation("next words")
+    check(pasted == ["next words"], f"a different window does not reuse that insert: {pasted}")
+    pasted.clear()
+    sel._last_insert_hwnd = 7
+    sel._last_insert_at = time.monotonic() - (sel._LAST_INSERT_S + 5)
+    sel.insert_dictation("next words")
+    check(pasted == ["next words"], f"an old insert does not supply the leading space: {pasted}")
+finally:
+    sel._alt_blocks_unicode = _old_block
+    sel._wait_alt_clear = _old_wait_alt
+    sel._modifiers_down = _old_mods3
+    sel._leave_on_clipboard = _old_leave3
+    sel._send_unicode = _old_uni3
+    sel._paste_text = _old_paste3
+    sel._cursor_previous = _old_prev3
+    sel._foreground_hwnd = _old_fg
+    sel.on_notice = _old_notice3
+
+import saytray.logs as _slog
+_cursor_events = []
+_old_cursor_log = _slog.event
+_slog.event = _cursor_events.append
+sel._cursor_fault_logged = False
+try:
+    _cursor_read = sel._cursor_previous()
+finally:
+    _slog.event = _old_cursor_log
+check(_cursor_read is None and any("cursor read failed (" in e for e in _cursor_events), f"a failed cursor read is logged once: {_cursor_events}")
+sel._cursor_fault_logged = False
+
 with tempfile.TemporaryDirectory() as d:
     path = os.path.join(d, "settings.json")
     write_atomic(path, {"voice": "en_US-norman-medium", "extra": 1})
@@ -435,13 +500,27 @@ check(should_prewarm("wired", True) is False, "an open mic is not pre-warmed aga
 check(classify_input("Headset Microphone (Oculus Virtual Audio Device)") == "virtual", "Oculus is virtual, not a wired headset")
 check(classify_input("Steam Streaming Microphone") == "virtual", "Steam Streaming is virtual")
 check(classify_input("Microphone (Realtek High Definition Audio)") == "wired", "Realtek stays wired")
-from saytray.dictation import choose_input_index
+check(classify_input("Microsoft Sound Mapper - Input") == "pseudo", "the MME sound mapper is not a real microphone")
+check(classify_input("Primary Sound Capture Driver") == "pseudo", "the primary capture driver is not a real microphone")
+from saytray.dictation import choose_input_index, past_audio_slack, segment_past_audio, model_idle_label
 devices = [
     {"index": 0, "name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1},
     {"index": 1, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 1},
 ]
 check(choose_input_index(devices, 0) == 1, "a virtual default yields the real microphone")
 check(choose_input_index(devices, 1) is None, "a real default is left alone")
+mapped = [
+    {"index": 0, "name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": "MME"},
+    {"index": 1, "name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1, "hostapi": "Windows WASAPI"},
+    {"index": 2, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 2, "hostapi": "Windows WASAPI"},
+    {"index": 3, "name": "Primary Sound Capture Driver", "max_input_channels": 2, "hostapi": "MME"},
+]
+check(choose_input_index(mapped, 1) == 2, "Oculus as default skips the sound mapper and uses the WASAPI microphone")
+check(past_audio_slack(1.4) >= 1.0 and not segment_past_audio(2.0, 1.4), "Send it. ending at 2.0s on 1.4s of audio is kept")
+check(not segment_past_audio(5.1, 4.16), "Yes. ending at 5.1s on 4.16s of audio is kept")
+check(segment_past_audio(18.0, 0.5), "an end far past a short clip is still dropped")
+check(model_idle_label(600) == "10 minutes", f"the unload log uses the real idle limit: {model_idle_label(600)}")
+check(model_idle_label(90) == "90 seconds", f"a non-whole number of minutes is stated in seconds: {model_idle_label(90)}")
 check(should_prewarm("virtual", False) is False, "a virtual mic is not pre-warmed")
 from saytray.dictation import _PKEY_DEVICE_BUS, _PKEY_DEVICE_ENUMERATOR, propvariant_size
 check(propvariant_size() == 24, f"PROPVARIANT is 24 bytes, got {propvariant_size()}")
@@ -599,6 +678,10 @@ class _Model:
         self.kwargs = kw
         self.calls += 1
         seg = _Seg()
+        seg.no_speech_prob = getattr(self, "force_nsp", seg.no_speech_prob)
+        seg.avg_logprob = getattr(self, "force_lp", seg.avg_logprob)
+        if getattr(self, "force_text", None):
+            seg.text = self.force_text
         if getattr(self, "force_end", None):
             seg.end = self.force_end
         return [seg], None
@@ -626,7 +709,11 @@ try:
     fresh._gen = 1
     fresh._transcribe(np.zeros(8000, np.float32), 1)
     check(inserted == [], "silence is not typed")
-    check(any("didn't hear anything" in n for n in notices), f"silence tells the user: {notices}")
+    check(not any("didn't hear anything" in n for n in notices), f"a half-second tap does not notify: {notices}")
+    notices.clear()
+    fresh._transcribe(np.zeros(32000, np.float32), 1)
+    check(inserted == [], "two seconds of silence is not typed")
+    check(any("didn't hear anything" in n for n in notices), f"a longer silence tells the user: {notices}")
     inserted.clear()
     fresh._closed = True
     fresh._transcribe(audio, 1)
@@ -642,8 +729,131 @@ try:
     fresh._gen = 6
     fresh._transcribe(np.full(11200, 0.002, np.float32), 5)
     check(fresh._model.calls == calls and inserted == [], "a newer tap supersedes an older noise clip")
+    fresh._model.force_end = 2.0
+    fresh._model.force_text = None
+    fresh._model.force_nsp = 0.1
+    fresh._gen = 8
+    inserted.clear()
+    fresh._transcribe(np.full(int(16000 * 1.4), 0.024, np.float32), 8)
+    check(inserted == ["second phrase"], f"Send it. is typed when Whisper's end is 2.0s: {inserted}")
+    fresh._model.force_end = 5.1
+    fresh._gen = 9
+    inserted.clear()
+    fresh._transcribe(np.full(int(16000 * 4.16), 0.017, np.float32), 9)
+    check(inserted == ["second phrase"], f"Yes. is typed when Whisper's end is 5.1s: {inserted}")
+    fresh._model.force_end = None
+    fresh._gen = 10
+    inserted.clear()
+    calls = fresh._model.calls
+    fresh._transcribe(np.full(int(16000 * 1.45), 0.0025, np.float32), 10)
+    check(fresh._model.calls == calls + 1 and inserted == ["second phrase"], f"quiet speech is transcribed and typed: {inserted}")
+    check(fresh._model.kwargs.get("vad_filter") is True and fresh._model.kwargs.get("temperature") == 0.0,
+          f"quiet speech uses VAD and temperature 0: {fresh._model.kwargs}")
+    fresh._model.force_nsp = 0.95
+    fresh._model.force_lp = -1.0
+    fresh._model.force_text = "E-A-S-A."
+    fresh._gen = 11
+    inserted.clear()
+    fresh._transcribe(np.full(int(16000 * 3.29), 0.0018, np.float32), 11)
+    check(inserted == [], "a quiet clip Whisper marks as no-speech is not typed")
+    check(fresh._model.kwargs.get("vad_filter") is True, "a 3s clip still uses the VAD filter")
+    fresh._model.force_nsp = 0.1
+    fresh._model.force_lp = -0.2
+    fresh._model.force_text = None
+    fresh._model.force_end = None
+    fresh._gen = 12
+    inserted.clear()
+    fresh._model = None
+    slept = {"n": 0}
+    _old_sleep = dmod.time.sleep
+    def _sleep_until_ready(seconds):
+        slept["n"] += 1
+        if slept["n"] >= 150:
+            fresh._model = _Model()
+    dmod.time.sleep = _sleep_until_ready
+    try:
+        fresh._transcribe(np.full(8000, 0.1, np.float32), 12)
+    finally:
+        dmod.time.sleep = _old_sleep
+    check(slept["n"] >= 150 and inserted == ["second phrase"], f"the first dictation waits past 10s for the model: {slept['n']} {inserted}")
 finally:
     dmod.insert_dictation = old_insert
+
+def _open_while_playing(stream):
+    sd = types.ModuleType("sounddevice")
+    sd._initialized = True
+    events = []
+    sd._terminate = lambda: events.append("terminate")
+    sd._initialize = lambda: events.append("initialize")
+    devices = [
+        {"name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": 0},
+        {"name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1, "hostapi": 1},
+        {"name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 2, "hostapi": 1},
+    ]
+    apis = [
+        {"name": "MME", "default_input_device": 0},
+        {"name": "Windows WASAPI", "default_input_device": 1},
+    ]
+    def query_devices(*args, **kwargs):
+        if kwargs.get("kind") == "input":
+            return {"name": devices[1]["name"]}
+        if args:
+            return devices[int(args[0])]
+        return list(devices)
+    sd.query_devices = query_devices
+    sd.query_hostapis = lambda: list(apis)
+    sd.default = types.SimpleNamespace(device=(1, 2))
+    opened = []
+    class _In:
+        def __init__(self, **kw):
+            self.active = False
+            opened.append(kw)
+        def start(self):
+            self.active = True
+        def stop(self):
+            self.active = False
+        def close(self):
+            self.active = False
+    sd.InputStream = _In
+    prev = sys.modules.get("sounddevice")
+    sys.modules["sounddevice"] = sd
+    mic = None
+    try:
+        mic = _bare_dictation("virtual", False)
+        mic.player = types.SimpleNamespace(_stream=stream)
+        ok = mic._open_warm()
+        return ok, events, opened
+    finally:
+        if prev is None:
+            sys.modules.pop("sounddevice", None)
+        else:
+            sys.modules["sounddevice"] = prev
+        if mic is not None and getattr(mic, "_idle_timer", None) is not None:
+            mic._idle_timer.cancel()
+
+_play_ok, _play_events, _play_opened = _open_while_playing(types.SimpleNamespace(active=True, closed=False))
+check(_play_ok and _play_events == [] and _play_opened and _play_opened[0].get("device") == 2,
+      f"opening the mic during playback does not restart PortAudio and skips the mapper: {_play_ok} {_play_events} {_play_opened}")
+_stopped_ok, _stopped_events, _stopped_opened = _open_while_playing(types.SimpleNamespace(active=False, closed=False))
+check(_stopped_ok and _stopped_events == [] and _stopped_opened,
+      f"a stopped output stream still blocks a PortAudio restart: {_stopped_ok} {_stopped_events}")
+_idle_ok, _idle_events, _idle_opened = _open_while_playing(None)
+check(_idle_ok and _idle_events == ["terminate", "initialize"] and _idle_opened and _idle_opened[0].get("device") == 2,
+      f"PortAudio restarts only when no stream is open: {_idle_ok} {_idle_events} {_idle_opened}")
+
+_unload_events = []
+_old_unload_log = dmod.logs.event
+dmod.logs.event = _unload_events.append
+try:
+    unloading = _bare_dictation("wired", False)
+    unloading._model_lock = threading.Lock()
+    unloading._model_token = 1.0
+    unloading._model = object()
+    unloading._model_loading = False
+    unloading._unload_model(1.0)
+finally:
+    dmod.logs.event = _old_unload_log
+check(any("whisper unloaded after 10 minutes idle" in e for e in _unload_events), f"unload log uses the idle limit: {_unload_events}")
 
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 guard_files = [
@@ -787,6 +997,11 @@ def _check_save_and_startup():
             check("Test-Path -LiteralPath $lnk" in install and "Quarantine" in install, "the installer checks shortcuts and explains a block")
             check("CurrentVersion\\Run" in install, "the installer can save a Run key")
             check("ExecutionPolicy Bypass" not in install, "the installed commands do not use ExecutionPolicy Bypass")
+            check("try {" in install and "Could not copy uninstall.ps1" in install, "a blocked uninstall.ps1 copy does not abort the install")
+            check("built-in uninstall command" in install, "Apps & Features is not pointed at a missing uninstall script")
+            check("test_dictation_order.py" in open(os.path.join(os.path.dirname(__file__), "..", "run_tests.ps1"), encoding="utf-8").read()
+                  and "test_requirements_wheels.py" in open(os.path.join(os.path.dirname(__file__), "..", "run_tests.ps1"), encoding="utf-8").read(),
+                  "run_tests.ps1 includes the order and wheel suites")
             start_src = open(os.path.join(os.path.dirname(__file__), "..", "saytray", "startup.py"), encoding="utf-8").read()
             check("powershell" not in start_src.lower(), "startup does not launch PowerShell to write a shortcut")
             speaker_src = open(os.path.join(os.path.dirname(__file__), "..", "saytray", "speaker.py"), encoding="utf-8").read()

@@ -20,14 +20,17 @@ SR = 16000
 _PRE_ROLL_S = 0.45
 _MIN_LIVE_S = 0.15
 _MIN_TRANSCRIBE_S = 0.30     # shorter than this is a tap, not speech
-_SHORT_CLIP_S = 1.5          # room noise under this length needs a stronger energy gate
-_SHORT_VAD_S = 2.0           # temperature fallback and VAD apply under this length
-_SHORT_ENERGY_RMS = 0.004
+_SHORT_VAD_S = 8.0           # temperature 0 and VAD for a phrase; a long slice stays unfiltered
+_MODEL_WAIT_S = 60.0         # a cold Whisper plus VAD load can take longer than 10 seconds
 _GRACE_S = 0.25          # keep capturing briefly after key-up so the last word is not lost
 _IDLE_MIC_S = 3.0           # every input is released soon after a hold so the mic indicator turns off
-_MODEL_IDLE_S = 600.0       # unload Whisper after 10 minutes with no dictation
+_MODEL_IDLE_S = 600.0       # unload Whisper after this long with no dictation
 _CHIME_SETTLE_S = 0.40       # a just-opened stream waits this long before the start chime
-_SILENCE_RMS = 0.001
+_SILENCE_RMS = 0.001         # digital silence only; quiet speech sits above this
+_SUPERSEDED_TAP_S = 1.0      # a replaced tap this short is not sent to Whisper
+_SUPERSEDED_TAP_RMS = 0.01   # louder than this, a short older clip can still be real speech
+_SILENCE_NOTICE_S = 1.0      # stray taps do not raise the "didn't hear anything" notice
+_SILENCE_NOTICE_GAP_S = 8.0
 
 
 def keep_whisper_segment(text, no_speech_prob, avg_logprob):
@@ -55,6 +58,43 @@ _VIRTUAL_MARKS = (
     "vb-audio", "vb-cable", "voicemeeter", "virtual audio", "virtual cable",
     "cable output", "cable input",
 )
+# MME names that point back at the default endpoint. They are not a real microphone.
+_PSEUDO_MARKS = (
+    "microsoft sound mapper",
+    "primary sound capture driver",
+    "primary sound driver",
+)
+
+
+def model_idle_label(seconds=None):
+    """How the unload log should describe the idle limit."""
+    if seconds is None:
+        seconds = _MODEL_IDLE_S
+    seconds = float(seconds)
+    minutes = seconds / 60.0
+    if minutes >= 1 and abs(minutes - round(minutes)) < 1e-6:
+        n = int(round(minutes))
+        unit = "minute" if n == 1 else "minutes"
+        return f"{n} {unit}"
+    n = max(0, int(round(seconds)))
+    unit = "second" if n == 1 else "seconds"
+    return f"{n} {unit}"
+
+
+def past_audio_slack(audio_s):
+    """Room for a Whisper end time that is rounded past the clip.
+
+    A second covers a short phrase such as "Send it." (1.4 s of audio, end at
+    2.0 s). A longer clip also allows 25% so "Yes." (about 4.2 s, end at 5.1 s)
+    is kept. An end many seconds past the audio is still dropped.
+    """
+    try:
+        audio = float(audio_s)
+    except (TypeError, ValueError):
+        audio = 0.0
+    if audio < 0:
+        audio = 0.0
+    return max(1.0, audio * 0.25)
 
 
 def classify_input(name="", endpoint_id="", instance_id=""):
@@ -72,6 +112,8 @@ def classify_input(name="", endpoint_id="", instance_id=""):
     low = n.lower()
     if any(mark in low for mark in _VIRTUAL_MARKS):
         return "virtual"
+    if any(mark in low for mark in _PSEUDO_MARKS):
+        return "pseudo"
     if low.startswith("headset ("):
         return "hands-free"
     if any(mark in low for mark in _HANDSFREE_MARKS):
@@ -88,31 +130,49 @@ def combine_input_kinds(*kinds):
         return "wired"
     if "virtual" in kinds:
         return "virtual"
+    if "pseudo" in kinds:
+        return "pseudo"
     return "unknown"
 
 
-def choose_input_index(devices, default_index=None):
-    """Index of a real microphone when the default input is virtual.
+def _real_input(dev):
+    if int(dev.get("max_input_channels") or 0) < 1:
+        return False
+    return classify_input(dev.get("name") or "") in ("wired", "hands-free")
 
-    Returns None to keep the default. `devices` is a list of dicts with
-    index, name, and max_input_channels.
+
+def _wasapi_input(dev):
+    return "WASAPI" in str(dev.get("hostapi") or "").upper()
+
+
+def choose_input_index(devices, default_index=None):
+    """Index of a real microphone when the default input is virtual or a mapper.
+
+    Returns None to keep a real default. `devices` is a list of dicts with
+    index, name, max_input_channels, and an optional hostapi name.
+    Sound Mapper and Primary Sound Driver entries are skipped. A WASAPI
+    microphone is preferred over an MME alias of the same default.
     """
     default = None
     for dev in devices or []:
         if default_index is not None and dev.get("index") == default_index:
             default = dev
             break
-    if default is not None and classify_input(default.get("name") or "") != "virtual":
+    if default is not None and _real_input(default):
         return None
     if default is None and default_index is None:
         return None
+    candidates = []
     for dev in devices or []:
-        if int(dev.get("max_input_channels") or 0) < 1:
-            continue
         if default is not None and dev.get("index") == default.get("index"):
             continue
-        if classify_input(dev.get("name") or "") in ("wired", "hands-free"):
+        if _real_input(dev):
+            candidates.append(dev)
+    for dev in candidates:
+        if _wasapi_input(dev):
             return dev.get("index")
+    if candidates:
+        return candidates[0].get("index")
     return None
 
 
@@ -126,8 +186,8 @@ def clip_rms(samples):
 def clip_should_skip(samples, sample_rate):
     """Why a clip should not be sent to Whisper, or '' when it should.
 
-    A very short tap is ignored. Room noise under 1.5 s is ignored unless it
-    is loud enough to be speech. Longer clips use the digital-silence gate only.
+    A tap under 0.30 s is ignored. Digital silence is ignored. Quiet speech
+    is sent on; the VAD filter and no_speech_prob decide whether it was noise.
     """
     n = 0 if samples is None else len(samples)
     if n <= 0 or not sample_rate:
@@ -135,18 +195,27 @@ def clip_should_skip(samples, sample_rate):
     dur = n / float(sample_rate)
     if dur < _MIN_TRANSCRIBE_S:
         return "too short"
-    if dur < _SHORT_CLIP_S and clip_rms(samples) < _SHORT_ENERGY_RMS:
-        return "low energy"
+    if clip_rms(samples) < _SILENCE_RMS:
+        return "silence"
     return ""
 
 
-def segment_past_audio(end, audio_s, slack=0.5):
-    """True when a Whisper timestamp runs past the audio that was sent."""
+def segment_past_audio(end, audio_s, slack=None):
+    """True when a Whisper timestamp runs past the audio that was sent.
+
+    The default slack is a second or 25% of the clip, whichever is larger.
+    """
+    if slack is None:
+        slack = past_audio_slack(audio_s)
     try:
         end_s = float(end)
     except (TypeError, ValueError):
         return False
-    return end_s > float(audio_s) + slack
+    try:
+        audio = float(audio_s)
+    except (TypeError, ValueError):
+        audio = 0.0
+    return end_s > audio + float(slack)
 
 
 def input_releases_quickly(name="", endpoint_id="", instance_id=""):
@@ -415,7 +484,7 @@ class Dictation:
         del model
         import gc
         gc.collect()
-        logs.event("dictation: whisper unloaded after 10 minutes idle")
+        logs.event(f"dictation: whisper unloaded after {model_idle_label()} idle")
 
     def _load_model(self, token=None):
         delay = 2.0
@@ -482,15 +551,16 @@ class Dictation:
                 if self._closed or self._stream_ok():
                     return False
             import sounddevice as sd
-            try:
-                if getattr(sd, "_initialized", False):
-                    sd._terminate()
-            except Exception:
-                pass
-            try:
-                sd._initialize()
-            except Exception:
-                pass
+            from .portaudio import lock as portaudio_lock, refresh_devices
+            # Restarting PortAudio under a live output stream crashes pythonw.
+            # Read the player stream only while holding the shared lock, so a
+            # keepalive open cannot land between the check and _terminate.
+            with portaudio_lock():
+                with self._lock:
+                    own = self._stream
+                player = getattr(self, "player", None)
+                playback = getattr(player, "_stream", None) if player is not None else None
+                refresh_devices((own, playback))
             short, wasapi = _host_input_names()
             endpoint, instance = _windows_capture_ids()
             name = wasapi or short
@@ -504,12 +574,27 @@ class Dictation:
             try:
                 listed = sd.query_devices()
                 default_index = sd.default.device[0]
+                host_names = []
+                try:
+                    host_names = [str(api.get("name") or "") for api in sd.query_hostapis()]
+                except Exception:
+                    host_names = []
                 rows = []
                 for i, dev in enumerate(listed):
+                    api_name = ""
+                    api_i = dev["hostapi"] if "hostapi" in dev else None
+                    if isinstance(api_i, str):
+                        api_name = api_i
+                    elif api_i is not None:
+                        try:
+                            api_name = host_names[int(api_i)]
+                        except Exception:
+                            api_name = ""
                     rows.append({
                         "index": i,
                         "name": dev["name"],
                         "max_input_channels": dev["max_input_channels"],
+                        "hostapi": api_name,
                     })
                 picked = choose_input_index(rows, default_index)
             except Exception:
@@ -519,13 +604,13 @@ class Dictation:
                 device = picked
                 picked_name = next((row["name"] for row in rows if row["index"] == picked), "")
                 logs.event(
-                    f"dictation: default input {name or 'unknown'!r} is virtual; using {picked_name!r}"
+                    f"dictation: default input {name or 'unknown'!r} is {kind}; using {picked_name!r}"
                 )
                 name = picked_name or name
                 kind = classify_input(name)
-            elif kind == "virtual":
+            elif kind in ("virtual", "pseudo"):
                 logs.event(
-                    f"dictation: warning: default input {name or 'unknown'!r} is virtual "
+                    f"dictation: warning: default input {name or 'unknown'!r} is {kind} "
                     "and no other microphone was found"
                 )
             self._input_name = name or short
@@ -777,6 +862,23 @@ class Dictation:
                 pass
             logs.event(f"dictation: microphone released after idle; input stream stopped and closed ({self._input_kind})")
 
+    def _announce_silence(self, dur):
+        """Tell the user the mic was quiet. A stray tap does not raise a notice."""
+        try:
+            dur = float(dur)
+        except (TypeError, ValueError):
+            dur = 0.0
+        if dur < _SILENCE_NOTICE_S:
+            logs.event(f"dictation: silence notice skipped for a {dur:.2f}s tap")
+            return
+        now = time.monotonic()
+        last = getattr(self, "_silence_notice_at", 0.0) or 0.0
+        if now - last < _SILENCE_NOTICE_GAP_S:
+            logs.event("dictation: silence notice throttled")
+            return
+        self._silence_notice_at = now
+        self._notify("SayTray didn't hear anything. If you were speaking, check the microphone and try again.")
+
     def _notify(self, message):
         logs.event("dictation: " + message)
         if self.on_notice:
@@ -852,21 +954,25 @@ class Dictation:
 
     def _transcribe(self, audio, gen):
         dur = len(audio) / SR
+        if self._newer_tap(gen) and dur < _SUPERSEDED_TAP_S and clip_rms(audio) < _SUPERSEDED_TAP_RMS:
+            logs.event(f"dictation: drop gen {gen} (short noise; a newer tap superseded it)")
+            return
         skip = clip_should_skip(audio, SR)
         if skip and self._newer_tap(gen):
             logs.event(f"dictation: drop gen {gen} ({skip}; a newer tap superseded it)")
             return
         if skip:
             logs.event(f"dictation: {skip}, ignored")
-            if skip != "too short":
-                self._notify("SayTray didn't hear anything. If you were speaking, check the microphone and try again.")
+            self._announce_silence(dur)
             return
         if dur < _MIN_LIVE_S:
             logs.event("dictation: too short, ignored")
             return
-        for _ in range(100):
-            if self._model is not None:
-                break
+        deadline = time.monotonic() + _MODEL_WAIT_S
+        while self._model is None and time.monotonic() < deadline:
+            if self._closed:
+                logs.event(f"dictation: drop transcript gen {gen} (shut down)")
+                return
             time.sleep(0.1)
         if self._model is None:
             logs.event("dictation: no model")
@@ -952,7 +1058,7 @@ class Dictation:
             if text:
                 insert_dictation(text)
             elif silent_slices and not heard_slices:
-                self._notify("SayTray didn't hear anything. If you were speaking, check the microphone and try again.")
+                self._announce_silence(dur)
 
     def _state(self):
         if self.on_state:

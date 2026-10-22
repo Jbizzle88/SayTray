@@ -251,11 +251,24 @@ Until the Startup shortcut or the registry Run key is in place, SayTray will not
 }
 
 # 5. Add/Remove Programs (per-user / HKCU)
+# A blocked copy must not stop the install. Avast denies uninstall.ps1 on some PCs.
+$uninstScript = Join-Path $R "app\uninstall.ps1"
+$haveUninstall = $false
 if (Test-Path (Join-Path $Src "uninstall.ps1")) {
-  Copy-Item (Join-Path $Src "uninstall.ps1") "$R\app\uninstall.ps1" -Force
+  try {
+    Copy-Item (Join-Path $Src "uninstall.ps1") $uninstScript -Force -ErrorAction Stop
+    $haveUninstall = Test-Path -LiteralPath $uninstScript
+  } catch {
+    Write-Warning "Could not copy uninstall.ps1 ($($_.Exception.Message)). The rest of the install will continue. Antivirus may have blocked the script."
+    $haveUninstall = $false
+  }
 }
-if (!(Test-Path -LiteralPath "$R\app\uninstall.ps1")) {
-  Write-Warning "uninstall.ps1 is missing from $R\app. Antivirus may have quarantined it. Restore it from Avast or AVG Quarantine and allow $R, then run this installer again."
+if (-not $haveUninstall) {
+  Write-Warning @"
+uninstall.ps1 is missing from $R\app. Antivirus may have quarantined it.
+Restore it from Avast or AVG Quarantine and allow $R, then run this installer again.
+Apps & Features will use a built-in uninstall command until that script is in place.
+"@
 }
 $arp = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray"
 New-Item -Path $arp -Force | Out-Null
@@ -264,9 +277,17 @@ Set-ItemProperty $arp -Name "DisplayVersion" -Value $Version
 Set-ItemProperty $arp -Name "Publisher" -Value "Jon Becherer"
 Set-ItemProperty $arp -Name "InstallLocation" -Value $R
 Set-ItemProperty $arp -Name "DisplayIcon" -Value $IcoDst
-# RemoteSigned runs this local script without the Bypass flag antivirus products flag.
-Set-ItemProperty $arp -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$R\app\uninstall.ps1`""
-Set-ItemProperty $arp -Name "QuietUninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$R\app\uninstall.ps1`" -Quiet"
+# RemoteSigned runs a local script without the Bypass flag antivirus products flag.
+if ($haveUninstall) {
+  $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$uninstScript`""
+  $quietUninstallCmd = "$uninstallCmd -Quiet"
+} else {
+  # Do not point Apps & Features at a script that is not on disk.
+  $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command `"Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name SayTray -ErrorAction SilentlyContinue; Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SayTray.lnk'; Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk'; if (Test-Path -LiteralPath '$R') { Remove-Item -LiteralPath '$R' -Recurse -Force -ErrorAction SilentlyContinue }; Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray' -Recurse -Force -ErrorAction SilentlyContinue`""
+  $quietUninstallCmd = $uninstallCmd
+}
+Set-ItemProperty $arp -Name "UninstallString" -Value $uninstallCmd
+Set-ItemProperty $arp -Name "QuietUninstallString" -Value $quietUninstallCmd
 Set-ItemProperty $arp -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty $arp -Name "NoRepair" -Value 1 -Type DWord
 Set-ItemProperty $arp -Name "EstimatedSize" -Value 520000 -Type DWord

@@ -29,6 +29,10 @@ _MOD_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5)
 _clip_lock = threading.Lock()
 _insert_lock = threading.Lock()
 _last_inserted = ""
+_last_insert_hwnd = 0
+_last_insert_at = 0.0
+_LAST_INSERT_S = 180.0
+_cursor_fault_logged = False
 _typed_prefix = ""
 on_notice = None
 _MOD_WAIT_S = 30.0
@@ -65,6 +69,175 @@ def _vk_down(vk):
         return bool(user32.GetAsyncKeyState(int(vk)) & 0x8000)
     except Exception:
         return None
+
+
+def _named_down(vks, name):
+    """True when one of `vks` is down. None from Windows falls through to the keyboard library."""
+    known = [_vk_down(vk) for vk in vks]
+    if any(state is True for state in known):
+        return True
+    if known and all(state is False for state in known):
+        return False
+    if keyboard is None:
+        return False
+    try:
+        return bool(keyboard.is_pressed(name))
+    except Exception:
+        return False
+
+
+def _alt_blocks_unicode():
+    """Alt without Ctrl turns Unicode typing into a system character the target drops."""
+    return _named_down((VK_MENU, 0xA4, 0xA5), "alt") and not _named_down((0x11, 0xA2, 0xA3), "ctrl")
+
+
+def _lift_alt():
+    """Send Alt-up after the menu neutralizer. A physically held Alt stays down."""
+    _neutralize_alt_menu()
+    user32 = _user32()
+    if user32 is None or not hasattr(user32, "keybd_event"):
+        return
+    for vk in (0xA4, 0xA5, VK_MENU):
+        if not _vk_down(vk):
+            continue
+        try:
+            user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+
+
+def _wait_alt_clear(timeout=2.0):
+    """True once Alt is no longer blocking Unicode. A physical hold has to be released."""
+    _lift_alt()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if not _alt_blocks_unicode():
+            return True
+        time.sleep(0.02)
+    return not _alt_blocks_unicode()
+
+
+def _foreground_hwnd():
+    user32 = _user32()
+    if user32 is None or not hasattr(user32, "GetForegroundWindow"):
+        return 0
+    try:
+        return int(user32.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
+def _remember_insert(text):
+    """Remember what SayTray just typed, and where, for the next leading space."""
+    global _last_inserted, _last_insert_hwnd, _last_insert_at
+    _last_inserted = text or ""
+    _last_insert_hwnd = _foreground_hwnd()
+    _last_insert_at = time.monotonic()
+
+
+def _recent_insert_char():
+    """Last character SayTray typed in this window a moment ago, or None."""
+    text = _last_inserted or ""
+    if not text:
+        return None
+    if _last_insert_at and time.monotonic() - _last_insert_at > _LAST_INSERT_S:
+        return None
+    now = _foreground_hwnd()
+    if now and _last_insert_hwnd and int(now) != int(_last_insert_hwnd):
+        return None
+    return text[-1]
+
+
+def _log_cursor_fault(exc):
+    global _cursor_fault_logged
+    if _cursor_fault_logged:
+        return
+    _cursor_fault_logged = True
+    logs.event(f"spacing: cursor read failed ({type(exc).__name__})")
+
+
+def _focused_hwnd():
+    """The control that has the caret in the foreground window, or 0."""
+    user32 = _user32()
+    fg = _foreground_hwnd()
+    if user32 is None or not fg or not hasattr(user32, "GetWindowThreadProcessId"):
+        return 0
+    try:
+        get_tid = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p)(
+            ("GetWindowThreadProcessId", user32)
+        )
+        tid = get_tid(fg, None)
+        if not tid or not hasattr(user32, "GetGUIThreadInfo"):
+            return 0
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_ulong),
+                ("flags", ctypes.c_ulong),
+                ("hwndActive", ctypes.c_void_p),
+                ("hwndFocus", ctypes.c_void_p),
+                ("hwndCapture", ctypes.c_void_p),
+                ("hwndMenuOwner", ctypes.c_void_p),
+                ("hwndMoveSize", ctypes.c_void_p),
+                ("hwndCaret", ctypes.c_void_p),
+                ("rcCaret", RECT),
+            ]
+
+        info = GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(GUITHREADINFO)
+        get_info = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p)(
+            ("GetGUIThreadInfo", user32)
+        )
+        if not get_info(tid, ctypes.byref(info)):
+            return 0
+        return int(info.hwndFocus or 0)
+    except Exception:
+        return 0
+
+
+def _edit_previous():
+    """One character before the caret in a classic Edit or RichEdit, or None."""
+    user32 = _user32()
+    hwnd = _focused_hwnd()
+    if user32 is None or not hwnd or not hasattr(user32, "SendMessageW"):
+        return None
+    get_class = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int)(
+        ("GetClassNameW", user32)
+    )
+    send = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p)(
+        ("SendMessageW", user32)
+    )
+    name = ctypes.create_unicode_buffer(256)
+    if get_class(hwnd, name, 256) <= 0:
+        return None
+    cls = (name.value or "").lower()
+    if "edit" not in cls:
+        return None
+    WM_GETTEXTLENGTH = 0x000E
+    WM_GETTEXT = 0x000D
+    EM_GETSEL = 0x00B0
+    n = int(send(hwnd, WM_GETTEXTLENGTH, 0, None) or 0)
+    if n < 0 or n > 1_000_000:
+        return None
+    if n == 0:
+        return ""
+    buf = ctypes.create_unicode_buffer(n + 1)
+    if int(send(hwnd, WM_GETTEXT, n + 1, ctypes.addressof(buf)) or 0) <= 0:
+        return None
+    start = ctypes.c_ulong()
+    end = ctypes.c_ulong()
+    send(hwnd, EM_GETSEL, ctypes.addressof(start), ctypes.addressof(end))
+    text = buf.value or ""
+    pos = int(start.value)
+    if pos <= 0:
+        return ""
+    if pos > len(text):
+        return None
+    return text[pos - 1]
 
 
 def _modifiers_down():
@@ -347,34 +520,50 @@ def _read_selection_locked():
     return text
 
 
+def _cursor_previous_uia():
+    """One character before the caret via UI Automation. Raises when the read fails."""
+    import comtypes
+    try:
+        comtypes.CoInitialize()
+    except Exception:
+        pass
+    import comtypes.client
+    try:
+        from comtypes.gen import UIAutomationClient as UIA
+    except Exception:
+        UIA = comtypes.client.GetModule("UIAutomationCore.dll")
+    uia = comtypes.client.CreateObject(UIA.CUIAutomation)
+    el = uia.GetFocusedElement()
+    unk = el.GetCurrentPattern(UIA.UIA_TextPatternId)
+    text = unk.QueryInterface(UIA.IUIAutomationTextPattern)
+    ranges = text.GetSelection()
+    if ranges.Length == 0:
+        return ""
+    clone = ranges.GetElement(0).Clone()
+    moved = clone.MoveEndpointByUnit(UIA.TextPatternRangeEndpoint_Start, UIA.TextUnit_Character, -1)
+    if not moved:
+        return ""
+    got = clone.GetText(2) or ""
+    return got[0] if got else ""
+
+
 def _cursor_previous():
     """One character before the caret, '' at the start of the field, or None if it can't be read."""
+    fault = None
     try:
-        import comtypes
-        try:
-            comtypes.CoInitialize()
-        except Exception:
-            pass
-        import comtypes.client
-        try:
-            from comtypes.gen import UIAutomationClient as UIA
-        except Exception:
-            UIA = comtypes.client.GetModule("UIAutomationCore.dll")
-        uia = comtypes.client.CreateObject(UIA.CUIAutomation)
-        el = uia.GetFocusedElement()
-        unk = el.GetCurrentPattern(UIA.UIA_TextPatternId)
-        text = unk.QueryInterface(UIA.IUIAutomationTextPattern)
-        ranges = text.GetSelection()
-        if ranges.Length == 0:
-            return ""
-        clone = ranges.GetElement(0).Clone()
-        moved = clone.MoveEndpointByUnit(UIA.TextPatternRangeEndpoint_Start, UIA.TextUnit_Character, -1)
-        if not moved:
-            return ""
-        got = clone.GetText(2) or ""
-        return got[0] if got else ""
-    except Exception:
-        return None
+        return _cursor_previous_uia()
+    except Exception as exc:
+        fault = exc
+    try:
+        edit = _edit_previous()
+    except Exception as exc:
+        edit = None
+        fault = fault or exc
+    if edit is not None:
+        return edit
+    if fault is not None:
+        _log_cursor_fault(fault)
+    return None
 
 
 def previous_class(previous):
@@ -392,15 +581,14 @@ def previous_class(previous):
 
 def insert_dictation(text):
     """Space back-to-back dictations, then type. Calls are serialized so pastes stay in order."""
-    global _last_inserted
     raw = text or ""
     if not raw.strip():
         return
     with _insert_lock:
         read = _cursor_previous()
         if read is None:
-            previous = _last_inserted[-1] if _last_inserted else None
-            source = "last-insert" if _last_inserted else "none"
+            previous = _recent_insert_char()
+            source = "last-insert" if previous else "none"
         elif read == "":
             previous = None
             source = "boundary"
@@ -414,10 +602,10 @@ def insert_dictation(text):
         kind = previous_class(previous)
         if not type_text(prepared):
             if _typed_prefix:
-                _last_inserted = _typed_prefix
+                _remember_insert(_typed_prefix)
             logs.event(f"insert: failed {len(prepared)} chars previous={source} class={kind}")
             return
-        _last_inserted = prepared
+        _remember_insert(prepared)
         logs.event(f"insert: {len(prepared)} chars leading-space={spaced} previous={source} class={kind}")
 
 
@@ -431,9 +619,13 @@ def _leave_on_clipboard(text):
 def type_text(text):
     """Insert text at the cursor. Returns False when the text was not fully typed.
 
-    A paste never runs while a modifier is held. If Unicode typing stops partway,
-    only the untyped remainder is pasted, and only after the modifiers are up.
-    If they stay down, that remainder is left on the clipboard and this returns False.
+    A paste never runs while a modifier is held. Unicode typing is used while
+    Ctrl is held, because a paste would become Ctrl+Alt+V. Alt alone turns
+    that Unicode into a system character the target drops, so Alt is released
+    or the call waits and then returns False instead of claiming success.
+    If Unicode typing stops partway, only the untyped remainder is pasted, and
+    only after the modifiers are up. If they stay down, that remainder is left
+    on the clipboard and this returns False.
     """
     global _typed_prefix
     if not text:
@@ -442,6 +634,17 @@ def type_text(text):
     sent = 0
     _typed_prefix = ""
     _neutralize_alt_menu()
+    if _alt_blocks_unicode():
+        logs.event("type: Alt is held without Ctrl; waiting so the text is not dropped")
+        if not _wait_alt_clear(2.0):
+            logs.event("type: Alt stayed down; the text was not typed")
+            try:
+                _leave_on_clipboard(text)
+            except Exception as e:
+                logs.event(f"type: could not leave text on the clipboard: {e!r}")
+                return False
+            _notify("Alt was still held, so SayTray did not type. The dictation is on the clipboard.")
+            return False
     if _modifiers_down():
         logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
         try:
