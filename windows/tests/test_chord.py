@@ -179,6 +179,20 @@ try:
     hk._event(_Ev("alt", False))
     hk._event(_Ev("space", True))
     check(arms == [], f"releasing the modifiers drops the pending warm: {arms}")
+    arms.clear()
+    hk.clear()
+    sessions = []
+    hk.register("alt+`", lambda: None, "ctrl+alt+space", lambda: None, lambda: None, on_modifier=lambda held: sessions.append(held))
+    hk._event(_Ev("ctrl", True))
+    check(sessions == [], "one modifier does not start the session")
+    hk._event(_Ev("alt", True))
+    hk._event(_Ev("alt", True))
+    hk._event(_Ev("space", True))
+    check(sessions == [True], f"the modifier session starts once: {sessions}")
+    hk._event(_Ev("space", False))
+    check(sessions == [True], "releasing the main key keeps the modifier session")
+    hk._event(_Ev("alt", False))
+    check(sessions == [True, False], f"releasing a modifier ends the session: {sessions}")
 finally:
     hk.clear()
     if _prev is None:

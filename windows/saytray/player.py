@@ -127,9 +127,10 @@ class Player:
 
     def play_chime(self, kind="start"):
         """Restart the preloaded tone at the head of the output buffer so a rapid repeat is heard."""
+        logs.event(f"chime {kind}: requested")
         arr = self._chime_pcm.get(kind)
         if arr is None:
-            logs.event(f"chime {kind}: FAILED no preloaded buffer")
+            logs.event(f"chime {kind}: started=False no preloaded buffer")
             return False
         thread = threading.current_thread().name
         try:

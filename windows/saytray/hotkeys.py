@@ -46,6 +46,7 @@ class Hotkeys:
         self._on_down = None
         self._on_up = None
         self._on_arm = None
+        self._on_modifier = None
         self._on_unusable = None
         self._arm_timer = None
         self._arm_pending = False
@@ -53,7 +54,7 @@ class Hotkeys:
         self._dictate_main = ""
         self._read_mods = set()
 
-    def register(self, read_combo, on_read, dictate_combo, on_down, on_up, on_arm=None, on_unusable=None):
+    def register(self, read_combo, on_read, dictate_combo, on_down, on_up, on_arm=None, on_unusable=None, on_modifier=None):
         import keyboard
         self.clear()
         self._on_unusable = on_unusable
@@ -67,7 +68,7 @@ class Hotkeys:
         self._dictate_main = parts[-1] if len(parts) > 1 else ""
         read_parts = chord_parts(read_combo)
         self._read_mods = set(read_parts[:-1]) if len(read_parts) > 1 else set()
-        self._on_down, self._on_up, self._on_arm = on_down, on_up, on_arm
+        self._on_down, self._on_up, self._on_arm, self._on_modifier = on_down, on_up, on_arm, on_modifier
         self._hook = keyboard.hook(self._event)
         logs.event(f"hotkeys registered: read={read_combo} dictate(hold)={dictate_combo}")
 
@@ -98,10 +99,13 @@ class Hotkeys:
         is_down = e.event_type == keyboard.KEY_DOWN
         key = canonical(e.name)
         if self._arm is not None and self._arm.mods:
+            was_ready = self._arm.ready
             if self._arm.event(e.name, is_down):
                 self._schedule_arm()
             elif not self._arm.ready:
                 self._cancel_arm()
+            if self._arm.ready != was_ready:
+                self._modifier(self._arm.ready)
         if is_down and self._dictate_main:
             if key == self._dictate_main:
                 self._flush_arm()
@@ -136,6 +140,7 @@ class Hotkeys:
         self._cancel_arm()
         self._dictate_main = ""
         self._read_mods = set()
+        self._on_modifier = None
 
     def _read_modifiers_held(self):
         arm = self._arm
@@ -180,3 +185,8 @@ class Hotkeys:
             timer.cancel()
         if fire and self._on_arm:
             self._on_arm()
+
+    def _modifier(self, held):
+        fn = self._on_modifier
+        if fn:
+            fn(bool(held))
