@@ -91,38 +91,81 @@ def _alt_blocks_unicode():
     return _named_down((VK_MENU, 0xA4, 0xA5), "alt") and not _named_down((0x11, 0xA2, 0xA3), "ctrl")
 
 
-def _lift_alt():
-    """Send Alt-up after the menu neutralizer. A physically held Alt stays down."""
-    _neutralize_alt_menu()
+_neutralizer_held = False
+
+
+def _key_event(vk, flags):
     user32 = _user32()
     if user32 is None or not hasattr(user32, "keybd_event"):
-        return
+        return False
+    try:
+        user32.keybd_event(int(vk), 0, int(flags), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _hold_menu_neutralizer():
+    """Hold VK 0xE8 down so the Alt-up that follows is a chord, not a menu key.
+
+    A tap that is released before Alt goes up does not count. The user's
+    physical Alt-up has to happen while this key is still down.
+    """
+    global _neutralizer_held
+    if _neutralizer_held:
+        return True
+    if not _key_event(VK_UNASSIGNED, 0):
+        return False
+    _neutralizer_held = True
+    logs.event("type: menu neutralizer held so Alt-up does not open the menu")
+    return True
+
+
+def _release_menu_neutralizer():
+    """Release VK 0xE8 after Alt is already up."""
+    global _neutralizer_held
+    if not _neutralizer_held:
+        return False
+    _key_event(VK_UNASSIGNED, KEYEVENTF_KEYUP)
+    _neutralizer_held = False
+    return True
+
+
+def _lift_alt():
+    """Send Alt-up while the menu neutralizer is held. A physically held Alt stays down."""
+    if _named_down((VK_MENU, 0xA4, 0xA5), "alt"):
+        _hold_menu_neutralizer()
     for vk in (0xA4, 0xA5, VK_MENU):
         if not _vk_down(vk):
             continue
-        try:
-            user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
-        except Exception:
-            pass
+        _key_event(vk, KEYEVENTF_KEYUP)
 
 
 def _wait_alt_clear(timeout=2.0, settle=0.1):
     """True when Alt has stayed up for `settle` seconds.
 
     One Alt-up is not enough. Autorepeat can put Alt straight back down, and
-    Unicode typed in that gap never appears.
+    Unicode typed in that gap never appears. VK 0xE8 stays down for the whole
+    wait, so the Alt-up that ends the hold does not open the window menu.
     """
+    if _alt_blocks_unicode():
+        _hold_menu_neutralizer()
     _lift_alt()
     t0 = time.time()
     clear_since = None
     while time.time() - t0 < timeout:
         if _alt_blocks_unicode():
+            _hold_menu_neutralizer()
             clear_since = None
         elif clear_since is None:
             clear_since = time.time()
         elif time.time() - clear_since >= settle:
+            time.sleep(0.02)
+            _release_menu_neutralizer()
             return True
         time.sleep(0.02)
+    if not _alt_blocks_unicode():
+        _release_menu_neutralizer()
     return False
 
 
@@ -263,23 +306,79 @@ def _modifiers_down():
         return False
 
 
-def _tap_vk(vk):
+def _menu_open():
+    """True when the foreground thread is in a menu the Alt-up just opened."""
     user32 = _user32()
-    if user32 is None or not hasattr(user32, "keybd_event"):
+    if user32 is None or not hasattr(user32, "GetGUIThreadInfo"):
         return False
     try:
-        user32.keybd_event(int(vk), 0, 0, 0)
-        user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
-        return True
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long),
+            ]
+
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_ulong),
+                ("flags", ctypes.c_ulong),
+                ("hwndActive", ctypes.c_void_p),
+                ("hwndFocus", ctypes.c_void_p),
+                ("hwndCapture", ctypes.c_void_p),
+                ("hwndMenuOwner", ctypes.c_void_p),
+                ("hwndMoveSize", ctypes.c_void_p),
+                ("hwndCaret", ctypes.c_void_p),
+                ("rcCaret", RECT),
+            ]
+
+        info = GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(info)
+        tid = 0
+        fg = _foreground_hwnd()
+        if fg and hasattr(user32, "GetWindowThreadProcessId"):
+            tid = int(user32.GetWindowThreadProcessId(fg, None) or 0)
+        if not user32.GetGUIThreadInfo(tid, ctypes.byref(info)):
+            return False
+        if int(info.flags) & 0x4:
+            return True
+        return bool(info.hwndMenuOwner)
     except Exception:
         return False
 
 
-def _neutralize_alt_menu():
-    """Send VK 0xE8 before Alt goes up so Windows does not open the menu bar."""
-    if _vk_down(VK_MENU) is False and _vk_down(0xA4) is False and _vk_down(0xA5) is False:
+def _dismiss_menu():
+    """Close a menu the Alt-up opened, so the paste is not delivered to it."""
+    if not _menu_open():
         return False
-    return _tap_vk(VK_UNASSIGNED)
+    logs.event("type: Alt opened the window menu; dismissing it before pasting")
+    _key_event(0x1B, 0)
+    _key_event(0x1B, KEYEVENTF_KEYUP)
+    time.sleep(0.05)
+    return True
+
+
+def _ctrl_down():
+    return _named_down((0x11, 0xA2, 0xA3), "ctrl")
+
+
+def _release_injected_modifiers():
+    """Key-up modifiers this process injected.
+
+    A Ctrl left down after a paste turns the next letter into a shortcut.
+    """
+    try:
+        for vk in (0x11, 0xA2, 0xA3, 0x10, 0xA0, 0xA1, 0x5B, 0x5C, 0x12, 0xA4, 0xA5):
+            _key_event(vk, KEYEVENTF_KEYUP)
+        _release_menu_neutralizer()
+        if keyboard is not None:
+            for name in ("ctrl", "shift", "alt", "left windows", "right windows", "alt gr"):
+                try:
+                    keyboard.release(name)
+                except Exception:
+                    pass
+        logs.event("type: injected modifiers released")
+    except Exception as e:
+        logs.event(f"type: could not release injected modifiers: {e!r}")
 
 
 def _wait_mods_released(timeout=1.0):
@@ -355,26 +454,27 @@ def text_after_units(text, sent_units):
 
 
 def _release_mods():
-    alt_down = _vk_down(VK_MENU)
+    alt_down = _named_down((VK_MENU, 0xA4, 0xA5), "alt")
     if alt_down:
-        _neutralize_alt_menu()
-    if keyboard is None:
-        return
+        _hold_menu_neutralizer()
     for name, vk in (("alt", VK_MENU), ("ctrl", 0x11), ("shift", 0x10)):
         down = _vk_down(vk)
-        if down is None:
+        if down is None and keyboard is not None:
             try:
                 down = keyboard.is_pressed(name)
             except Exception:
                 down = False
         if not down:
             continue
-        if name == "alt" and not alt_down:
-            _neutralize_alt_menu()
-        try:
-            keyboard.release(name)
-        except Exception:
-            pass
+        if name == "alt":
+            _hold_menu_neutralizer()
+        _key_event(vk, KEYEVENTF_KEYUP)
+        if keyboard is not None:
+            try:
+                keyboard.release(name)
+            except Exception:
+                pass
+    _release_menu_neutralizer()
 
 
 def unicode_events(text):
@@ -625,6 +725,11 @@ def _leave_on_clipboard(text):
     pyperclip.copy(text)
 
 
+def _paste_landed(text):
+    """False when the paste went to the window menu instead of the caret."""
+    return not _menu_open()
+
+
 def type_text(text):
     """Insert text at the cursor. Returns False when the text was not fully typed.
 
@@ -634,7 +739,8 @@ def type_text(text):
     or the call waits and then returns False instead of claiming success.
     If Unicode typing stops partway, only the untyped remainder is pasted, and
     only after the modifiers are up. If they stay down, that remainder is left
-    on the clipboard and this returns False.
+    on the clipboard and this returns False. A paste that does not land does
+    not report success, and the previous clipboard value stays replaced.
     """
     global _typed_prefix
     if not text:
@@ -642,55 +748,75 @@ def type_text(text):
         return False
     sent = 0
     _typed_prefix = ""
-    _neutralize_alt_menu()
+    ctrl_was_down = _ctrl_down()
     alt_clear = True
-    if _alt_blocks_unicode():
-        logs.event("type: Alt is held without Ctrl; waiting so the text is not dropped")
-        alt_clear = _wait_alt_clear(2.0)
-        if not alt_clear:
-            logs.event("type: Alt did not stay up; pasting once it is released")
-    if alt_clear and _modifiers_down():
-        logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
-        try:
-            sent = _send_unicode(text) or 0
-            if _alt_blocks_unicode():
-                logs.event("type: Alt went down while typing; the unicode was not trusted")
-                sent = 0
-            elif sent > 0:
-                return True
-        except InputIncomplete as e:
-            sent = e.sent
-            logs.event(f"type: unicode stopped after {sent} units: {e}")
-        except Exception as e:
-            sent = int(getattr(e, "sent", 0) or 0)
-            logs.event(f"type: unicode input failed: {e!r}; will paste the rest after the shortcut is released")
-    _typed_prefix = text_before_units(text, sent)
-    remainder = text_after_units(text, sent)
-    if not remainder:
-        return sent > 0
-    if _modifiers_down() or not alt_clear:
-        logs.event("type: waiting for the shortcut to be released before pasting")
-        if not _wait_mods_released(2.0):
+    try:
+        if _alt_blocks_unicode():
+            logs.event("type: Alt is held without Ctrl; waiting so the text is not dropped")
+            _hold_menu_neutralizer()
+            alt_clear = _wait_alt_clear(2.0)
+            if not alt_clear:
+                logs.event("type: Alt did not stay up; pasting once it is released")
+        if alt_clear and _modifiers_down():
+            logs.event(f"type: modifiers held; unicode input ({len(text)} chars)")
+            try:
+                sent = _send_unicode(text) or 0
+                if _alt_blocks_unicode():
+                    logs.event("type: Alt went down while typing; the unicode was not trusted")
+                    sent = 0
+                elif sent > 0:
+                    return True
+            except InputIncomplete as e:
+                sent = e.sent
+                logs.event(f"type: unicode stopped after {sent} units: {e}")
+            except Exception as e:
+                sent = int(getattr(e, "sent", 0) or 0)
+                logs.event(f"type: unicode input failed: {e!r}; will paste the rest after the shortcut is released")
+        _typed_prefix = text_before_units(text, sent)
+        remainder = text_after_units(text, sent)
+        if not remainder:
+            return sent > 0
+        if _modifiers_down() or not alt_clear:
+            logs.event("type: waiting for the shortcut to be released before pasting")
+            if not _wait_mods_released(2.0):
+                try:
+                    _leave_on_clipboard(remainder)
+                except Exception as e:
+                    logs.event(f"type: could not leave text on the clipboard: {e!r}")
+                    return False
+                if not alt_clear:
+                    _notify("Alt was still held, so SayTray did not type. The dictation is on the clipboard.")
+                else:
+                    _notify("The shortcut was still held, so SayTray did not paste. The rest of the dictation is on the clipboard.")
+                return False
+        _release_menu_neutralizer()
+        if _menu_open():
+            _dismiss_menu()
+        if _menu_open():
             try:
                 _leave_on_clipboard(remainder)
             except Exception as e:
                 logs.event(f"type: could not leave text on the clipboard: {e!r}")
                 return False
-            if not alt_clear:
-                _notify("Alt was still held, so SayTray did not type. The dictation is on the clipboard.")
-            else:
-                _notify("The shortcut was still held, so SayTray did not paste. The rest of the dictation is on the clipboard.")
+            _notify("Alt opened the window menu, so SayTray did not type. The dictation is on the clipboard.")
             return False
-    try:
-        with _clip_lock:
-            _paste_text(remainder)
-        return True
-    except Exception as e:
-        logs.event(f"type: paste failed: {e!r}")
-        return False
+        try:
+            with _clip_lock:
+                landed = _paste_text(remainder)
+            if landed is False:
+                _notify("SayTray couldn't type into the window. The dictation is on the clipboard.")
+                return False
+            return True
+        except Exception as e:
+            logs.event(f"type: paste failed: {e!r}")
+            return False
+    finally:
+        if not ctrl_was_down and not _alt_blocks_unicode():
+            _release_injected_modifiers()
 
 
 def _paste_text(text):
+    """Paste `text`. Returns False when it did not land. The clipboard is then left holding `text`."""
     if pyperclip is None or keyboard is None:
         raise OSError("clipboard unavailable")
     try:
@@ -700,9 +826,14 @@ def _paste_text(text):
     pyperclip.copy(text)
     time.sleep(0.05)
     keyboard.send("ctrl+v")
+    _release_injected_modifiers()
     time.sleep(0.6)
+    if not _paste_landed(text):
+        logs.event("type: paste did not land; clipboard left in place")
+        return False
     if old is not None:
         try:
             pyperclip.copy(old)
         except Exception:
             pass
+    return True

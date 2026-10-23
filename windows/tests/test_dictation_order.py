@@ -74,7 +74,18 @@ try:
     check(inserted == [f"w{i}" for i in range(1, 7)], f"every word types in order: {inserted}")
     fresh._gen = 9
     fresh._transcribe(np.full(8000, 0.05, np.float32), 3)
-    check(inserted[-1] == "w6" and fresh._model.n == 6, "an earlier session is not typed into the next one")
+    check(inserted[-1] == "w7" and fresh._model.n == 7, "an earlier dictation still types after a newer one has started")
+    fresh._register_turn(8)
+    fresh._register_turn(9)
+    def _run(gen):
+        fresh._transcribe(np.full(8000, 0.05, np.float32), gen)
+    t9 = threading.Thread(target=_run, args=(9,))
+    t8 = threading.Thread(target=_run, args=(8,))
+    t9.start()
+    t8.start()
+    t8.join(2)
+    t9.join(2)
+    check(inserted[-2:] == ["w8", "w9"], f"an earlier dictation is typed before the later one: {inserted[-2:]}")
     before = len(inserted)
     fresh._gen = 3
     calls = fresh._model.n
