@@ -411,6 +411,116 @@ finally:
     sel._foreground_hwnd = _old_fg
     sel.on_notice = _old_notice3
 
+_seq_block = sel._alt_blocks_unicode
+_seq_hold = sel._hold_menu_neutralizer
+_seq_rel = sel._release_menu_neutralizer
+_seq_lift = sel._lift_alt
+_seq_mods = sel._modifiers_down
+_seq_menu = sel._menu_open
+_seq_dismiss = sel._dismiss_menu
+_seq_paste = sel._paste_text
+_seq_ctrl = sel._ctrl_down
+_seq_notice = sel.on_notice
+_seq_leave = sel._leave_on_clipboard
+_seq_injected = sel._release_injected_modifiers
+_seq_uni = sel._send_unicode
+try:
+    phase = {"alt": True, "held": False}
+    order = []
+    notices = []
+    pasted = []
+    released = []
+    sel.on_notice = notices.append
+    def _hold():
+        order.append(("hold", phase["alt"]))
+        phase["held"] = True
+        return True
+    def _blocks():
+        if phase["held"] and phase["alt"]:
+            order.append(("alt-up", True))
+            phase["alt"] = False
+        return phase["alt"]
+    sel._hold_menu_neutralizer = _hold
+    sel._release_menu_neutralizer = lambda: order.append("neutralizer-up") or True
+    sel._lift_alt = lambda: order.append("lift")
+    sel._alt_blocks_unicode = _blocks
+    sel._modifiers_down = lambda: False
+    sel._menu_open = lambda: False
+    sel._dismiss_menu = lambda: False
+    sel._ctrl_down = lambda: False
+    sel._paste_text = lambda text: pasted.append(text) or True
+    sel._release_injected_modifiers = lambda: released.append("mods")
+    ok = sel.type_text("held alt phrase")
+    check(ok is True and pasted == ["held alt phrase"], f"Ctrl released and Alt held still types: {ok} {pasted}")
+    check(("hold", True) in order and ("alt-up", True) in order and order.index(("hold", True)) < order.index(("alt-up", True)),
+          f"the menu key is held before Alt goes up: {order}")
+    check(released == ["mods"], f"injected modifiers are released after that paste: {released}")
+    phase["alt"] = True
+    phase["held"] = False
+    pasted.clear()
+    notices.clear()
+    left = []
+    sel._leave_on_clipboard = left.append
+    sel._menu_open = lambda: True
+    ok = sel.type_text("menu ate it")
+    check(ok is False and pasted == [] and left == ["menu ate it"], f"an open window menu is not reported as typed: {ok} {pasted} {left}")
+    check(any("menu" in n.lower() for n in notices), f"the menu swallow is announced: {notices}")
+    sel._menu_open = lambda: False
+    sel._alt_blocks_unicode = lambda: False
+    sel._modifiers_down = lambda: True
+    sel._ctrl_down = lambda: True
+    sel._send_unicode = lambda text: len(text)
+    released.clear()
+    ok = sel.type_text("while held")
+    check(ok is True and released == [], f"a physically held Ctrl is not released out from under the hotkey: {ok} {released}")
+finally:
+    sel._alt_blocks_unicode = _seq_block
+    sel._hold_menu_neutralizer = _seq_hold
+    sel._release_menu_neutralizer = _seq_rel
+    sel._lift_alt = _seq_lift
+    sel._modifiers_down = _seq_mods
+    sel._menu_open = _seq_menu
+    sel._dismiss_menu = _seq_dismiss
+    sel._paste_text = _seq_paste
+    sel._ctrl_down = _seq_ctrl
+    sel.on_notice = _seq_notice
+    sel._leave_on_clipboard = _seq_leave
+    sel._release_injected_modifiers = _seq_injected
+    sel._send_unicode = _seq_uni
+
+class _Clip:
+    def __init__(self):
+        self.value = "OLD"
+    def paste(self):
+        return self.value
+    def copy(self, value):
+        self.value = value
+
+_old_clip = sel.pyperclip
+_old_board = sel.keyboard
+_old_landed = sel._paste_landed
+_old_sleep = sel.time.sleep
+_old_injected = sel._release_injected_modifiers
+try:
+    clip = _Clip()
+    sel.pyperclip = clip
+    sel.keyboard = type("Keys", (), {"send": lambda self, combo: None, "release": lambda self, name: None})()
+    sel.time.sleep = lambda _seconds: None
+    sel._release_injected_modifiers = lambda: None
+    sel._paste_landed = lambda text: False
+    check(sel._paste_text("dictated words") is False and clip.value == "dictated words",
+          f"a swallowed paste stays on the clipboard: {clip.value}")
+    clip.value = "OLD"
+    sel._paste_landed = lambda text: True
+    check(sel._paste_text("dictated words") is True and clip.value == "OLD",
+          f"a paste that lands restores the previous clipboard: {clip.value}")
+finally:
+    sel.pyperclip = _old_clip
+    sel.keyboard = _old_board
+    sel._paste_landed = _old_landed
+    sel.time.sleep = _old_sleep
+    sel._release_injected_modifiers = _old_injected
+
 import saytray.logs as _slog
 _cursor_events = []
 _old_cursor_log = _slog.event
@@ -515,7 +625,7 @@ check(classify_input("Steam Streaming Microphone") == "virtual", "Steam Streamin
 check(classify_input("Microphone (Realtek High Definition Audio)") == "wired", "Realtek stays wired")
 check(classify_input("Microsoft Sound Mapper - Input") == "pseudo", "the MME sound mapper is not a real microphone")
 check(classify_input("Primary Sound Capture Driver") == "pseudo", "the primary capture driver is not a real microphone")
-from saytray.dictation import choose_input_index, past_audio_slack, segment_past_audio, model_idle_label, input_open_order, try_open_input, resample_audio, transcript_rejected
+from saytray.dictation import choose_input_index, past_audio_slack, segment_past_audio, model_idle_label, input_open_order, resolve_pinned_index, try_open_input, resample_audio, transcript_rejected
 devices = [
     {"index": 0, "name": "Headset Microphone (Oculus Virtual Audio Device)", "max_input_channels": 1},
     {"index": 1, "name": "Microphone (Realtek High Definition Audio)", "max_input_channels": 1},
@@ -539,6 +649,11 @@ oculus_order = input_open_order(oculus_devices, 1)
 check(oculus_order[:2] == [22, 3], f"Oculus falls through to Realtek WASAPI, then MME: {oculus_order}")
 pinned_order = input_open_order(oculus_devices, 1, pinned_index=3)
 check(pinned_order[0] == 3 and 22 in pinned_order and 1 not in pinned_order, f"a chosen Realtek mic stays selected: {pinned_order}")
+_realtek = "Microphone (Realtek High Definition Audio)"
+check(resolve_pinned_index(oculus_devices, 3, _realtek) == 3, "a pinned Realtek mic is still present")
+check(resolve_pinned_index(oculus_devices, 99, _realtek) is None, "a missing pin falls back")
+check(resolve_pinned_index(oculus_devices, 3, "Other Microphone") is None, "a reused device index is not the pinned mic")
+check(input_open_order(oculus_devices, 1, None)[:2] == [22, 3], "with the pin gone, the real default mic is first")
 check(len(resample_audio(np.zeros(48000, np.float32), 48000, 16000)) == 16000, "48 kHz capture is resampled to 16 kHz")
 
 class _RateDevice:
@@ -781,7 +896,9 @@ try:
     fresh._notify = lambda message: None
     audio = np.full(8000, 0.1, np.float32)
     fresh._transcribe(audio, 1)
-    check(inserted == [] and fresh._model.calls == 0, f"a transcript from an earlier session is not typed: {inserted}")
+    check(inserted == ["second phrase"] and fresh._model.calls == 1, f"an earlier dictation is typed when a newer one has started: {inserted}")
+    inserted.clear()
+    fresh._model.calls = 0
     fresh._transcribe(audio, 2)
     check(inserted == ["second phrase"], f"the current session still types: {inserted}")
     check(fresh._model.kwargs.get("vad_filter") is True and fresh._model.kwargs.get("temperature") == 0.0,
@@ -838,8 +955,10 @@ try:
     fresh._model.force_text = "E-A-S-A."
     fresh._gen = 11
     inserted.clear()
+    notices.clear()
     fresh._transcribe(np.full(int(16000 * 3.29), 0.0018, np.float32), 11)
     check(inserted == [], "a quiet clip Whisper marks as no-speech is not typed")
+    check(any("didn't recognize any words" in n for n in notices), f"no recognized words is announced: {notices}")
     check(fresh._model.kwargs.get("vad_filter") is True, "a 3s clip still uses the VAD filter")
     fresh._model.force_nsp = 0.1
     fresh._model.force_lp = -0.2
@@ -867,6 +986,14 @@ try:
     finally:
         dmod.time.sleep = _old_sleep
     check(slept["n"] >= 150 and inserted == ["second phrase"], f"the first dictation waits past 10s for the model: {slept['n']} {inserted}")
+    fresh._model = None
+    fresh._gen = 20
+    fresh._model_loading = False
+    fresh._model_lock = None
+    inserted.clear()
+    waited = time.time()
+    fresh._transcribe(np.full(8000, 0.1, np.float32), 1)
+    check(inserted == [] and time.time() - waited < 2, f"a clip still waiting on the model is not typed into a newer session: {inserted}")
 finally:
     dmod.insert_dictation = old_insert
 
@@ -1141,6 +1268,12 @@ def _check_save_and_startup():
             check("Stop-Process" in install and "run_saytray.pyw" in install, "the fallback uninstall quits SayTray first")
             check("@('app','venv','debug')" in install and "Settings and voices are kept" in install, "the fallback uninstall keeps settings and voices")
             check("Remove-Item -LiteralPath '$R' -Recurse" not in install, "the fallback uninstall does not delete the whole SayTray folder")
+            check("EncodedCommand" not in install, "the fallback uninstall is a readable command")
+            uninst = open(os.path.join(os.path.dirname(__file__), "..", "uninstall.ps1"), encoding="utf-8").read()
+            check("Stop-Process" in uninst and "run_saytray.pyw" in uninst, "uninstall stops SayTray first")
+            check("CurrentVersion\\Run" in uninst, "uninstall removes the startup Run key")
+            check('@("app", "venv", "debug")' in uninst, "uninstall removes the program files")
+            check("Remove-Item $R -Recurse" not in uninst and '"voices"' not in uninst, "uninstall keeps settings and voices")
             check("test_dictation_order.py" in open(os.path.join(os.path.dirname(__file__), "..", "run_tests.ps1"), encoding="utf-8").read()
                   and "test_requirements_wheels.py" in open(os.path.join(os.path.dirname(__file__), "..", "run_tests.ps1"), encoding="utf-8").read(),
                   "run_tests.ps1 includes the order and wheel suites")
@@ -1148,6 +1281,7 @@ def _check_save_and_startup():
             check("powershell" not in start_src.lower(), "startup does not launch PowerShell to write a shortcut")
             speaker_src = open(os.path.join(os.path.dirname(__file__), "..", "saytray", "speaker.py"), encoding="utf-8").read()
             check("SAYTRAY_DEBUG" in speaker_src and "saytray-read-" in speaker_src, "read audio is kept only in debug mode")
+            check('logs.event("read: stopped")' in speaker_src, "stopping a read is written to the log")
     finally:
         os.replace = old_replace
         cfg._REPLACE_TRIES = old_tries

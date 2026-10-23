@@ -105,12 +105,15 @@ class Speaker:
 
     def stop(self):
         with self._lock:
+            playing = self._session is not None or not self.player.idle
             if self._session:
                 self._session.cancelled = True
                 self.engine.cancel(self._session.id)
             self._session = None
             self.player.stop()
             self._discard_read_dir()
+        if playing:
+            logs.event("read: stopped")
         self._state()
 
     def _state(self):

@@ -17,6 +17,7 @@ from .config import coerce_bool
 from .selection import insert_dictation
 
 SR = 16000
+_turn_init_lock = threading.Lock()
 _PRE_ROLL_S = 0.45
 _MIN_LIVE_S = 0.15
 _MIN_TRANSCRIBE_S = 0.30     # shorter than this is a tap, not speech
@@ -261,6 +262,20 @@ def _host_rank(dev):
     if "MME" in host:
         return 2
     return 3
+
+
+def resolve_pinned_index(devices, pinned_index, pinned_name=None):
+    """The pinned index, or None when that microphone is no longer present.
+
+    A reused index whose name is a different device is treated as gone, so
+    capture can move to the new default real microphone.
+    """
+    row = next((d for d in devices or [] if d.get("index") == pinned_index), None)
+    if row is None or not _real_input(row):
+        return None
+    if pinned_name and not _same_physical_mic(row.get("name"), pinned_name):
+        return None
+    return pinned_index
 
 
 def input_open_order(devices, default_index=None, pinned_index=None):
@@ -635,6 +650,7 @@ def begin_dictation(speaker, dictation):
     transcript is the user's speech and not SayTray's own voice.
     """
     if speaker is not None and getattr(speaker, "speaking", False):
+        logs.event("read: stopped because dictation started")
         speaker.stop()
         dictation.drop_preroll = True
     dictation.start()
@@ -800,6 +816,37 @@ class Dictation:
         endpoint, _instance = _windows_capture_ids()
         return bool(endpoint and self._endpoint_id and endpoint != self._endpoint_id)
 
+    def _pinned_present(self):
+        """False when the pinned device is gone. A query failure keeps the pin."""
+        pin = getattr(self, "_device_index", None)
+        if pin is None:
+            return False
+        try:
+            import sounddevice as sd
+            listed = sd.query_devices()
+        except Exception:
+            return True
+        rows = []
+        for i, dev in enumerate(listed):
+            try:
+                channels = dev["max_input_channels"]
+                name = dev["name"]
+            except Exception:
+                continue
+            rows.append({"index": i, "name": name, "max_input_channels": channels})
+        return resolve_pinned_index(rows, pin, getattr(self, "_input_name", None)) is not None
+
+    def _release_missing_pin(self):
+        """Close a live stream when the pinned mic has disappeared."""
+        if not self._stream_ok() or not self._default_changed():
+            return False
+        if getattr(self, "_device_index", None) is None or self._pinned_present():
+            return False
+        logs.event("dictation: pinned microphone is gone; reopening on the default real microphone")
+        self._device_index = None
+        self._close_stream()
+        return True
+
     def _open_warm(self):
         with self._open_lock:
             with self._lock:
@@ -872,7 +919,14 @@ class Dictation:
                     f"dictation: warning: default input {name or 'unknown'!r} is {kind} "
                     "and no other microphone was found"
                 )
-            order = input_open_order(rows, default_index, getattr(self, "_device_index", None))
+            pin = resolve_pinned_index(rows, getattr(self, "_device_index", None), getattr(self, "_input_name", None))
+            if getattr(self, "_device_index", None) is not None and pin is None:
+                logs.event(
+                    f"dictation: pinned microphone {getattr(self, '_input_name', None) or self._device_index!r} "
+                    "is gone; using the default real microphone"
+                )
+                self._device_index = None
+            order = input_open_order(rows, default_index, pin)
             if not order and device is not None:
                 order = [device]
             opened = None
@@ -946,7 +1000,9 @@ class Dictation:
         with self._lock:
             running = self._stream_ok()
             kind = self._input_kind
-        if running and self._default_changed() and getattr(self, "_device_index", None) is None:
+        if self._release_missing_pin():
+            running = False
+        elif running and self._default_changed() and getattr(self, "_device_index", None) is None:
             logs.event("dictation: default input changed; closing the microphone so it can reopen")
             self._close_stream()
             running = False
@@ -969,6 +1025,8 @@ class Dictation:
         if self._stream_ok() and self._default_changed() and getattr(self, "_device_index", None) is None:
             logs.event("dictation: default input changed; reopening the microphone")
             self._close_stream()
+        else:
+            self._release_missing_pin()
         with self._lock:
             if self._closed:
                 logs.event("dictation: start ignored, shutting down")
@@ -1079,6 +1137,7 @@ class Dictation:
             self._arm_mic_idle()
             self._schedule_model_unload()
             return
+        self._register_turn(gen)
         threading.Thread(target=self._finish, args=(audio, gen), daemon=True, name="dictation-stop").start()
 
     def set_modifier_session(self, held):
@@ -1251,9 +1310,48 @@ class Dictation:
         with self._lock:
             return self._gen > gen
 
+    def _turns(self):
+        cond = getattr(self, "_turn_cond", None)
+        if cond is not None:
+            return cond, self._turn_queue
+        with _turn_init_lock:
+            if getattr(self, "_turn_cond", None) is None:
+                self._turn_cond = threading.Condition()
+                self._turn_queue = []
+            return self._turn_cond, self._turn_queue
+
+    def _register_turn(self, gen):
+        """Remember a dictation that must be typed before any later one."""
+        cond, queue = self._turns()
+        with cond:
+            queue.append(gen)
+
+    def _wait_turn(self, gen):
+        cond, queue = self._turns()
+        with cond:
+            while gen in queue and queue and queue[0] != gen and not getattr(self, "_closed", False):
+                cond.wait(0.05)
+
+    def _finish_turn(self, gen):
+        cond, queue = self._turns()
+        with cond:
+            try:
+                queue.remove(gen)
+            except ValueError:
+                pass
+            cond.notify_all()
+
     def _transcribe(self, audio, gen):
-        if not self._result_current(gen):
-            logs.event(f"dictation: drop transcript gen {gen} (session is no longer current)")
+        """Transcribe, then let the next dictation run. Earlier audio is typed first."""
+        self._wait_turn(gen)
+        try:
+            self._transcribe_job(audio, gen)
+        finally:
+            self._finish_turn(gen)
+
+    def _transcribe_job(self, audio, gen):
+        if getattr(self, "_closed", False):
+            logs.event(f"dictation: drop transcript gen {gen} (shut down)")
             return
         dur = len(audio) / SR
         if self._newer_tap(gen) and dur < _SUPERSEDED_TAP_S and clip_rms(audio) < _SUPERSEDED_TAP_RMS:
@@ -1270,15 +1368,19 @@ class Dictation:
         if dur < _MIN_LIVE_S:
             logs.event("dictation: too short, ignored")
             return
+        waiting_for_model = self._model is None
         self._ensure_model()
-        deadline = time.monotonic() + _MODEL_WAIT_S
-        while self._model is None and time.monotonic() < deadline:
-            if not self._result_current(gen):
-                logs.event(f"dictation: drop transcript gen {gen} (session is no longer current)")
-                return
-            if not getattr(self, "_model_loading", False):
-                self._ensure_model()
-            time.sleep(0.1)
+        if waiting_for_model:
+            deadline = time.monotonic() + _MODEL_WAIT_S
+            while self._model is None and time.monotonic() < deadline:
+                if not self._result_current(gen):
+                    logs.event(
+                        f"dictation: drop transcript gen {gen} (session changed while the model was loading)"
+                    )
+                    return
+                if not getattr(self, "_model_loading", False):
+                    self._ensure_model()
+                time.sleep(0.1)
         if self._model is None:
             logs.event("dictation: model not ready")
             if getattr(self, "_model_error", None):
@@ -1354,8 +1456,10 @@ class Dictation:
                 f"(first {first} last {last}); splitting so the rest is kept"
             )
 
-        # One model call at a time. A result is typed only when its session is
-        # still the current one, so a late transcript cannot land in a later dictation.
+        # One model call at a time. An earlier dictation finishes and types
+        # before the next one starts, even if the user already began that next hold.
+        # A clip that is still waiting for the model when a newer hold starts is
+        # the exception: that late result is not typed into the new session.
         with self._transcribe_lock:
             with self._lock:
                 if self._closed:
@@ -1366,13 +1470,12 @@ class Dictation:
                 return
             text = stitch_audio(audio, SR, SEGMENT_S, transcribe_audio, on_resplit=on_resplit)
             logs.event(f"dictation: gen {gen} audio {dur:.2f}s transcript {len(text)} chars in {time.time() - t0:.1f}s")
-            if not self._result_current(gen):
-                logs.event(f"dictation: drop transcript gen {gen} (session is no longer current)")
-                return
             if text:
                 insert_dictation(text)
             elif silent_slices and not heard_slices:
                 self._announce_silence(dur)
+            elif heard_slices:
+                self._notify("SayTray didn't recognize any words.")
 
     def _state(self):
         if self.on_state:

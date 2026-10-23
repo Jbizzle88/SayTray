@@ -60,7 +60,7 @@ Download a newer zip and run **Install.cmd** again (or `install.ps1`). Settings 
 - **Settings → Apps → SayTray → Uninstall**, or  
 - Run `uninstall.ps1` from the zip / `%LOCALAPPDATA%\SayTray\app\uninstall.ps1`
 
-`uninstall.ps1 -KeepSettings` keeps `settings.json`.
+Uninstall stops SayTray, removes the program files, shortcuts, and the startup Run key, and keeps `settings.json` and downloaded voices. `-KeepSettings` does the same.
 
 ---
 

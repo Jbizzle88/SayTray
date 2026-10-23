@@ -283,23 +283,14 @@ if ($haveUninstall) {
   $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$uninstScript`""
   $quietUninstallCmd = "$uninstallCmd -Quiet"
 } else {
-  # Do not point Apps & Features at a script that is not on disk.
-  # Quit SayTray first. Remove the program files only. settings.json and voices stay.
-  $inlineUninstall = @"
-Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object { `$_.CommandLine -like '*run_saytray.pyw*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Milliseconds 800
-Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name SayTray -ErrorAction SilentlyContinue
-Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SayTray.lnk'
-Remove-Item -Force -ErrorAction SilentlyContinue '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk'
-foreach (`$dir in @('app','venv','debug')) {
-  `$p = Join-Path '$R' `$dir
-  if (Test-Path -LiteralPath `$p) { Remove-Item -LiteralPath `$p -Recurse -Force -ErrorAction SilentlyContinue }
-}
-Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray' -Recurse -Force -ErrorAction SilentlyContinue
-"@
-  $encodedUninstall = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inlineUninstall))
-  $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -EncodedCommand $encodedUninstall"
-  $quietUninstallCmd = $uninstallCmd
+  # Do not point Apps & Features at a script that is not on disk, and do not
+  # hide the command in a base64 blob. Quit SayTray first. Remove the program
+  # files only. settings.json and voices stay.
+  $uninstallCmd = @'
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe'\" | Where-Object { $_.CommandLine -like '*run_saytray.pyw*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 800; Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name SayTray -ErrorAction SilentlyContinue; Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\SayTray.lnk'); Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk'); foreach ($dir in @('app','venv','debug')) { $p = Join-Path (Join-Path $env:LOCALAPPDATA 'SayTray') $dir; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue } }; Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray' -Recurse -Force -ErrorAction SilentlyContinue"
+'@
+  $quietUninstallCmd = $uninstallCmd.Trim()
+  $uninstallCmd = $quietUninstallCmd
 }
 Set-ItemProperty $arp -Name "UninstallString" -Value $uninstallCmd
 Set-ItemProperty $arp -Name "QuietUninstallString" -Value $quietUninstallCmd
