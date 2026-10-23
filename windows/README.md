@@ -15,7 +15,7 @@ Works fully offline after install downloads voices and Python packages. No accou
 ## Install (download zip)
 
 1. Unzip `SayTray-*-Windows.zip`.
-2. Double-click **Install.cmd** (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
+2. Double-click **Install.cmd** (or run `powershell -File install.ps1`). If Windows says scripts are disabled, run `powershell -ExecutionPolicy RemoteSigned -File install.ps1`.
 3. First install downloads Python packages + about **170 MB** of Piper voices (Norman and LJSpeech) into `%LOCALAPPDATA%\SayTray`.
 4. SayTray appears in the tray and Start Menu; it also registers under **Settings → Apps** (per-user).
 
@@ -60,15 +60,26 @@ Download a newer zip and run **Install.cmd** again (or `install.ps1`). Settings 
 - **Settings → Apps → SayTray → Uninstall**, or  
 - Run `uninstall.ps1` from the zip / `%LOCALAPPDATA%\SayTray\app\uninstall.ps1`
 
-`uninstall.ps1 -KeepSettings` keeps `settings.json`.
+Uninstall stops SayTray, removes the program files, shortcuts, and the startup Run key, and keeps `settings.json` and downloaded voices. `-KeepSettings` does the same.
 
 ---
 
 ## Logs
 
-`%LOCALAPPDATA%\SayTray\Logs` (`events.log`, `guard.log`, `last\`).
+`%LOCALAPPDATA%\SayTray\Logs` (`events.log`, `guard.log`). Dictation text is not written there. The last read's audio is kept only while `SAYTRAY_DEBUG=1`.
 
 Debug drop files: `%LOCALAPPDATA%\SayTray\debug` (`speak.txt`, `dictate_start`, `dictate_stop`).
+
+## If Avast or AVG quarantines SayTray
+
+An install that stops the app, replaces files, and writes a Startup shortcut can be treated as suspicious. If `install.ps1`, `uninstall.ps1`, or `SayTray.lnk` disappear, or a later launch says it could not turn on startup:
+
+1. Open Avast or AVG → Menu → Quarantine.
+2. Restore those files and report the detection as a false positive.
+3. Allow `%LOCALAPPDATA%\SayTray` (Avast exception, and Windows Security → Exclusions).
+4. Run the installer again.
+
+The installer checks that the shortcuts exist and, if the Startup shortcut is blocked, saves launch-at-startup under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ---
 

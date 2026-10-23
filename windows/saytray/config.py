@@ -1,5 +1,5 @@
 """Persisted settings (%LOCALAPPDATA%\\SayTray\\settings.json)."""
-import json, os, threading, datetime
+import json, os, threading, time, datetime
 from .logs import ROOT
 from .voices import installed_ids, pretty_voice, resolve_saved_voice
 
@@ -158,15 +158,37 @@ def sanitize(data):
     return out
 
 
+_REPLACE_TRIES = 5
+_REPLACE_WAIT_S = 0.1
+
+
 def write_atomic(path, data):
-    """Replace `path` only after the new file is fully written."""
+    """Replace `path` only after the new file is fully written.
+
+    A scanner can hold the destination for a moment. Retry, then delete the
+    temp file so a failed save does not leave settings.json.tmp behind.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    last = None
+    tries = max(1, int(_REPLACE_TRIES))
+    for attempt in range(tries):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as e:
+            last = e
+            if attempt + 1 < tries:
+                time.sleep(_REPLACE_WAIT_S)
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    raise last
 
 
 def backup_unreadable(path):
@@ -183,40 +205,51 @@ def installed_voices():
     return installed_ids()
 
 
+_RESET_NOTICE = (
+    "SayTray couldn't read settings.json and reset them to the defaults. "
+    "The old file was kept next to it."
+)
+
+
 def read_settings(path):
-    """Return (data, should_write).
+    """Return (data, should_write, notice).
 
     A missing file is {}. JSON that does not parse, or JSON that is not an object,
     is moved to .bad and replaced with {}. A permission or sharing error leaves the
     file where it is and returns in-memory defaults without writing.
+    A UTF-8 BOM, as Notepad writes, is accepted. notice is set when the file was reset.
     """
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             loaded = json.load(f)
     except FileNotFoundError:
-        return {}, True
-    except json.JSONDecodeError:
+        return {}, True, None
+    except (json.JSONDecodeError, UnicodeError):
         try:
             backup_unreadable(path)
         except OSError:
             pass
-        return {}, True
+        return {}, True, _RESET_NOTICE
     except OSError:
-        return {}, False
+        return {}, False, None
     if not isinstance(loaded, dict):
         try:
             backup_unreadable(path)
         except OSError:
             pass
-        return {}, True
-    return loaded, True
+        return {}, True, _RESET_NOTICE
+    return loaded, True, None
 
 
 class Settings:
     def __init__(self):
         self._lock = threading.Lock()
-        raw, should_write = read_settings(PATH)
+        raw, should_write, notice = read_settings(PATH)
+        self.reset_notice = notice
         self.data = sanitize(raw or {})
+        if notice:
+            from . import logs
+            logs.event("settings: unreadable file was reset to defaults and the old file was kept")
         voice = resolve_saved_voice(self.data.get("voice") or "")
         if voice != self.data.get("voice"):
             self.data["voice"] = voice
@@ -242,10 +275,11 @@ class Settings:
     def set(self, **kw):
         with self._lock:
             if self._unreadable:
-                # The file could not be read. Keep this change in memory, and when the
-                # file can be read again merge only these changes onto it.
+                # The file could not be read or the last save failed. Keep this change
+                # in memory, and when the file can be written again merge only these
+                # changes onto it.
                 self._held.update(kw)
-                raw, should = read_settings(PATH)
+                raw, should, _notice = read_settings(PATH)
                 if not should:
                     merged = dict(self.data)
                     merged.update(kw)
@@ -258,14 +292,26 @@ class Settings:
                         self._write()
                     except OSError:
                         self._unreadable = True
+                        from . import logs
+                        logs.event("settings: save failed; the change is kept and will be written when the file is free")
                     else:
                         self._unreadable = False
                         self._held = {}
             else:
                 merged = dict(self.data)
                 merged.update(kw)
-                self.data = sanitize(merged)
-                self._write()
+                new_data = sanitize(merged)
+                try:
+                    write_atomic(PATH, new_data)
+                except OSError:
+                    self.data = new_data
+                    self._unreadable = True
+                    self._held.update(kw)
+                    from . import logs
+                    logs.event("settings: save failed; the change is kept and will be written when the file is free")
+                else:
+                    self.data = new_data
+                    self._held = {}
         for cb in list(self.listeners):
             try:
                 cb(kw)

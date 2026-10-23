@@ -35,6 +35,15 @@ check(TextPrep.splitInHalf("one two three, four five six seven eight")?.count ==
 check(BabbleGuard.check(text: "This sentence has exactly eight words in it.", seconds: 2.6, phonemes: 36).ok, "guard normal ok")
 check(!BabbleGuard.check(text: "I couldn't hear it myself, so give Option plus a try and let me know. If the background voice ever stalls, SayTray now restarts it and tries again on its own.", seconds: 4.8, phonemes: 150).ok, "guard catches known babble (4.8s/31 words)")
 check(!BabbleGuard.check(text: "This sentence has exactly eight words in it.", seconds: 12, phonemes: 36).ok, "guard catches too long")
+let shortExclaim = "OK. Yes! No. Hi there."
+let paused = BabbleGuard.check(text: shortExclaim, seconds: 3.4, phonemes: 17)
+check(paused.ok && TextPrep.wordCount(shortExclaim) < BabbleGuard.shortWords, "short exclamations with pauses stay speakable: \(paused.reason)")
+let measured = BabbleGuard.check(text: shortExclaim, seconds: 5.39, phonemes: 17)
+check(measured.ok, "Norman's 5.39s short line stays speakable: \(measured.reason)")
+let drone = BabbleGuard.check(text: shortExclaim, seconds: 9.0, phonemes: 17)
+check(!drone.ok && drone.reason == "too long per word", "a short line that drones still fails: \(drone.reason)")
+let skipped = BabbleGuard.check(text: shortExclaim, seconds: 0.5, phonemes: 17)
+check(!skipped.ok && skipped.reason.contains("too fast"), "skipped short speech still fails: \(skipped.reason)")
 check(chunks("").isEmpty && chunks("   \n\u{200B} 🎉 \n").isEmpty, "empty input")
 
 // Dictation spacing and segment concatenation (same rules as windows/saytray/spacing.py).

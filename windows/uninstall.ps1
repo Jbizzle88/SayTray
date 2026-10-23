@@ -1,4 +1,5 @@
-﻿# Uninstall SayTray (Windows). Removes shortcuts, app files, venv, voices; settings optional.
+﻿# Uninstall SayTray (Windows). Stops the app and removes program files, shortcuts,
+# and the startup Run key. settings.json and downloaded voices are kept.
 param(
   [switch]$KeepSettings,
   [switch]$Quiet
@@ -22,21 +23,20 @@ foreach ($s in $shortcuts) {
   if (Test-Path $s) { Remove-Item $s -Force; Say "Removed $s" }
 }
 
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SayTray" -ErrorAction SilentlyContinue
+Say "Removed startup Run key"
+
 # Remove Add/Remove Programs entry
 $arp = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray"
 if (Test-Path $arp) { Remove-Item $arp -Recurse -Force; Say "Removed Add/Remove Programs entry" }
 
+# -KeepSettings is accepted so an older shortcut still works. Settings and voices stay either way.
 if (Test-Path $R) {
-  if ($KeepSettings) {
-    foreach ($name in @("app", "venv", "voices", "debug", "Logs")) {
-      $p = Join-Path $R $name
-      if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue; Say "Removed $p" }
-    }
-    Say "Kept settings.json under $R"
-  } else {
-    Remove-Item $R -Recurse -Force
-    Say "Removed $R"
+  foreach ($name in @("app", "venv", "debug")) {
+    $p = Join-Path $R $name
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue; Say "Removed $p" }
   }
+  Say "Kept settings and voices under $R"
 } else {
   Say "Install folder not found (already removed?)"
 }

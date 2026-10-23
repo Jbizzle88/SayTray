@@ -1,4 +1,9 @@
-"""Logging: %LOCALAPPDATA%\\SayTray\\Logs\\events.log, guard.log, and the per-read Logs\\last folder."""
+"""Logging: %LOCALAPPDATA%\\SayTray\\Logs\\events.log, guard.log, and the per-read Logs\\last folder.
+
+Tests set SAYTRAY_LOG_DIR to a temp folder. That is read when a line is written,
+so a test never appends to the real events.log. The app leaves the variable unset
+and keeps using %LOCALAPPDATA%\\SayTray.
+"""
 import os, threading, datetime
 
 ROOT = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "SayTray")
@@ -7,6 +12,17 @@ LAST = os.path.join(LOGS, "last")
 VOICES = os.path.join(ROOT, "voices")
 _lock = threading.Lock()
 _MAX_BYTES = 512 * 1024
+
+
+def logs_dir():
+    override = os.environ.get("SAYTRAY_LOG_DIR")
+    if override:
+        return override
+    return LOGS
+
+
+def last_dir():
+    return os.path.join(logs_dir(), "last")
 
 
 def rotate_if_big(path, limit=_MAX_BYTES):
@@ -30,17 +46,17 @@ def append(line, path):
 
 
 def event(s):
-    append(s, os.path.join(LOGS, "events.log"))
+    append(s, os.path.join(logs_dir(), "events.log"))
 
 
 def guard(s):
     event("GUARD " + s)
-    append(s, os.path.join(LOGS, "guard.log"))
+    append(s, os.path.join(logs_dir(), "guard.log"))
 
 
 def purge_legacy_text_logs(root=None, version="1.1.0"):
     """Once per version, drop logs and WAVs that older builds filled with the user's text."""
-    root = root or LOGS
+    root = root or logs_dir()
     os.makedirs(root, exist_ok=True)
     marker = os.path.join(root, f".purged-{version}")
     if os.path.exists(marker):

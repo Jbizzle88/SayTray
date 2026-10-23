@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 import pystray
 from .config import Settings
 from .speaker import Speaker
-from .dictation import Dictation
+from .dictation import Dictation, begin_dictation
 from .hotkeys import HotkeySerial, Hotkeys
 from .selection import read_selection
 from .voices import (default_voice, downloads, format_size, installed_ids, is_installed_quick, normalize_speaker, start_trust_check,
@@ -85,7 +85,6 @@ class App:
 
         def _voices_trusted():
             try:
-                self.speaker.warm_up()
                 self.icon.menu = self._menu()
                 self.icon.update_menu()
             except Exception:
@@ -95,20 +94,26 @@ class App:
     # actions
     def read(self):
         if self.speaker.speaking:
+            logs.event("read: stop (was speaking)")
             self.speaker.stop()
             return
+        logs.event("read: started")
         def work():
             t = read_selection()
             if t:
                 self.speaker.speak(t)
         threading.Thread(target=work, daemon=True).start()
 
+    def dictate(self):
+        """Stop a read, then listen. The mic must not transcribe SayTray's own voice."""
+        begin_dictation(self.speaker, self.dictation)
+
     def _register(self):
         def unusable(combo):
             self._notice(f"The shortcut {combo} doesn't match this keyboard layout, so it wasn't turned on.")
         self.hotkeys.register(
             self.settings["read_hotkey"], self.read, self.settings["dictate_hotkey"],
-            lambda: self._keys.submit(self.dictation.start),
+            lambda: self._keys.submit(self.dictate),
             lambda: self._keys.submit(self.dictation.stop),
             on_arm=lambda: self._keys.submit(self.dictation.warm),
             on_unusable=unusable,
@@ -271,9 +276,12 @@ class App:
 
     def run(self):
         self._register()
-        self.speaker.warm_up()
         if self.settings["start_with_windows"] and not startup.enabled():
-            startup.set_enabled(True)
+            ok, message = startup.set_enabled(True)
+            if not ok and message:
+                self._notice(message)
+        if getattr(self.settings, "reset_notice", None):
+            self._notice(self.settings.reset_notice)
         if os.environ.get("SAYTRAY_DEBUG") == "1":
             threading.Thread(target=self._debug_watch, daemon=True).start()
         logs.event(f"launched; voice={self.settings['voice']} speed={self.settings['speed']} pid={os.getpid()}")
