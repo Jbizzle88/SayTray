@@ -188,25 +188,88 @@ if (Test-Path $IcoSrc) {
   & "$R\venv\Scripts\python.exe" -c "import sys; sys.path.insert(0, r'$R\app'); from saytray.app import _icon; _icon('idle').save(r'$IcoDst', sizes=[(16,16),(32,32),(48,48),(64,64)])"
 }
 
-# 4. Shortcuts: Start Menu + Startup
+# 4. Shortcuts: Start Menu + Startup. Check that each file exists afterwards.
+# Antivirus behavior shields (Avast, AVG) have quarantined these .lnk files.
 $ws = New-Object -ComObject WScript.Shell
 $targets = @(
   "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SayTray.lnk",
   "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk"
 )
+$blocked = @()
 foreach ($lnk in $targets) {
-  $s = $ws.CreateShortcut($lnk)
-  $s.TargetPath = "$R\venv\Scripts\pythonw.exe"
-  $s.Arguments = "`"$R\app\run_saytray.pyw`""
-  $s.WorkingDirectory = "$R\app"
-  $s.IconLocation = "$IcoDst"
-  $s.Description = "SayTray $Version — read selected text aloud, push-to-talk dictation"
-  $s.Save()
+  $dir = Split-Path -Parent $lnk
+  if ($dir -and !(Test-Path -LiteralPath $dir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  try {
+    $s = $ws.CreateShortcut($lnk)
+    $s.TargetPath = "$R\venv\Scripts\pythonw.exe"
+    $s.Arguments = "`"$R\app\run_saytray.pyw`""
+    $s.WorkingDirectory = "$R\app"
+    $s.IconLocation = "$IcoDst"
+    $s.Description = "SayTray $Version — read selected text aloud, push-to-talk dictation"
+    $s.Save()
+  } catch {
+    Write-Warning "Could not write $lnk : $_"
+  }
+  if (!(Test-Path -LiteralPath $lnk)) { $blocked += $lnk }
+}
+$startupLnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk"
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$runCmd = "`"$R\venv\Scripts\pythonw.exe`" `"$R\app\run_saytray.pyw`""
+if (!(Test-Path -LiteralPath $startupLnk)) {
+  try {
+    New-Item -Path $runKey -Force | Out-Null
+    Set-ItemProperty -Path $runKey -Name "SayTray" -Value $runCmd
+  } catch {
+    Write-Warning "Could not set the startup Run key: $_"
+  }
+  $saved = $null
+  try { $saved = (Get-ItemProperty -Path $runKey -Name "SayTray" -ErrorAction SilentlyContinue).SayTray } catch {}
+  if ($saved) {
+    Write-Output "Launch at startup was saved in the registry because the Startup shortcut was blocked."
+  } else {
+    Write-Warning "SayTray could not turn on launch at startup."
+  }
+} else {
+  Remove-ItemProperty -Path $runKey -Name "SayTray" -ErrorAction SilentlyContinue
+}
+if ($blocked.Count -gt 0) {
+  Write-Warning @"
+SayTray could not create these shortcuts:
+$($blocked -join [Environment]::NewLine)
+
+Your antivirus (often Avast or AVG) or a folder permission blocked them.
+1. Open Avast or AVG, choose Menu, then Quarantine.
+2. Restore install.ps1, uninstall.ps1, and SayTray.lnk if they are listed.
+3. Add an exception for this folder: $R
+4. In Windows Security, open Virus & threat protection, Manage settings, Exclusions, and add the same folder.
+5. Run this installer again.
+
+Until the Startup shortcut or the registry Run key is in place, SayTray will not start when Windows starts.
+"@
 }
 
 # 5. Add/Remove Programs (per-user / HKCU)
+# A blocked copy must not stop the install. Avast denies uninstall.ps1 on some PCs.
+$uninstScript = Join-Path $R "app\uninstall.ps1"
+$haveUninstall = $false
 if (Test-Path (Join-Path $Src "uninstall.ps1")) {
-  Copy-Item (Join-Path $Src "uninstall.ps1") "$R\app\uninstall.ps1" -Force
+  try {
+    Copy-Item (Join-Path $Src "uninstall.ps1") $uninstScript -Force -ErrorAction Stop
+    $haveUninstall = Test-Path -LiteralPath $uninstScript
+  } catch {
+    Write-Warning "Could not copy uninstall.ps1 ($($_.Exception.Message)). The rest of the install will continue. Antivirus may have blocked the script."
+    $haveUninstall = $false
+  }
+}
+if (-not $haveUninstall) {
+  Write-Warning @"
+uninstall.ps1 is missing from $R\app. Antivirus may have quarantined it.
+Restore it from Avast or AVG Quarantine and allow $R, then run this installer again.
+Apps & Features will use a built-in uninstall command until that script is in place.
+That command quits SayTray and removes the program files. Settings and voices are kept.
+"@
 }
 $arp = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray"
 New-Item -Path $arp -Force | Out-Null
@@ -215,8 +278,22 @@ Set-ItemProperty $arp -Name "DisplayVersion" -Value $Version
 Set-ItemProperty $arp -Name "Publisher" -Value "Jon Becherer"
 Set-ItemProperty $arp -Name "InstallLocation" -Value $R
 Set-ItemProperty $arp -Name "DisplayIcon" -Value $IcoDst
-Set-ItemProperty $arp -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$R\app\uninstall.ps1`""
-Set-ItemProperty $arp -Name "QuietUninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$R\app\uninstall.ps1`" -Quiet"
+# RemoteSigned runs a local script without the Bypass flag antivirus products flag.
+if ($haveUninstall) {
+  $uninstallCmd = "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File `"$uninstScript`""
+  $quietUninstallCmd = "$uninstallCmd -Quiet"
+} else {
+  # Do not point Apps & Features at a script that is not on disk, and do not
+  # hide the command in a base64 blob. Quit SayTray first. Remove the program
+  # files only. settings.json and voices stay.
+  $uninstallCmd = @'
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe'\" | Where-Object { $_.CommandLine -like '*run_saytray.pyw*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 800; Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name SayTray -ErrorAction SilentlyContinue; Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\SayTray.lnk'); Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\SayTray.lnk'); foreach ($dir in @('app','venv','debug')) { $p = Join-Path (Join-Path $env:LOCALAPPDATA 'SayTray') $dir; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue } }; Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SayTray' -Recurse -Force -ErrorAction SilentlyContinue"
+'@
+  $quietUninstallCmd = $uninstallCmd.Trim()
+  $uninstallCmd = $quietUninstallCmd
+}
+Set-ItemProperty $arp -Name "UninstallString" -Value $uninstallCmd
+Set-ItemProperty $arp -Name "QuietUninstallString" -Value $quietUninstallCmd
 Set-ItemProperty $arp -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty $arp -Name "NoRepair" -Value 1 -Type DWord
 Set-ItemProperty $arp -Name "EstimatedSize" -Value 520000 -Type DWord

@@ -193,8 +193,11 @@ class Player:
 
     def _ensure_stream(self):
         import sounddevice as sd
-        with self._stream_lock:
-            self._ensure_stream_locked(sd)
+        from .portaudio import lock as portaudio_lock
+        # Held across open so dictation cannot restart PortAudio underneath this stream.
+        with portaudio_lock():
+            with self._stream_lock:
+                self._ensure_stream_locked(sd)
 
     def _ensure_stream_locked(self, sd):
         if self._stream is None or not self._stream.active:
@@ -219,7 +222,7 @@ class Player:
                     path = val
                     self._log("PLAY " + os.path.basename(path))
                 else:
-                    path = os.path.join(os.path.dirname(self.play_log or logs.LAST), f"sapi-{time.time_ns()}.wav")
+                    path = os.path.join(os.path.dirname(self.play_log or logs.last_dir()), f"sapi-{time.time_ns()}.wav")
                     self._log(f"PLAY system: {len(val)} chars")
                     sapi.render(val, path, self.settings["sapi_voice"])
                 a, sr = _load(path)

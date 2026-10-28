@@ -1,5 +1,5 @@
 """Speaker: TextPrep -> ReadSession (Piper + guard) -> Player, one read at a time. Port of macOS Speaker."""
-import os, shutil, threading
+import os, shutil, tempfile, threading
 from .textprep import chunks as prep_chunks
 from .session import ReadSession
 from .engine import PiperEngine
@@ -49,14 +49,21 @@ class Speaker:
             return False
         with self._lock:
             self._read += 1
-            d = logs.LAST
-            shutil.rmtree(d, ignore_errors=True)
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, "input.txt"), "w", encoding="utf-8") as f:
-                f.write(
-                    f"READ {self._read} VOICE {self.settings['voice']} SPEED {self.settings['speed']} "
-                    f"CHARS {len(text)} CHUNKS {len(cs)}\n"
-                )
+            self._discard_read_dir()
+            debug = os.environ.get("SAYTRAY_DEBUG") == "1"
+            if debug:
+                d = logs.last_dir()
+                shutil.rmtree(d, ignore_errors=True)
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "input.txt"), "w", encoding="utf-8") as f:
+                    f.write(
+                        f"READ {self._read} VOICE {self.settings['voice']} SPEED {self.settings['speed']} "
+                        f"CHARS {len(text)} CHUNKS {len(cs)}\n"
+                    )
+            else:
+                d = tempfile.mkdtemp(prefix="saytray-read-")
+            self._read_dir = d
+            self._keep_dir = debug
             self.player.play_log = os.path.join(d, "play.log")
             self._gen = self.player.new_generation()
             use_piper = self._prepare()
@@ -85,15 +92,28 @@ class Speaker:
             self._next += 1
         if self._next == len(s.slots) and self.player.idle:
             self._session = None
+            self._discard_read_dir()
             self._state()
+
+    def _discard_read_dir(self):
+        d = getattr(self, "_read_dir", None)
+        keep = getattr(self, "_keep_dir", False)
+        self._read_dir = None
+        if d and not keep:
+            self.player.play_log = None
+            shutil.rmtree(d, ignore_errors=True)
 
     def stop(self):
         with self._lock:
+            playing = self._session is not None or not self.player.idle
             if self._session:
                 self._session.cancelled = True
                 self.engine.cancel(self._session.id)
             self._session = None
             self.player.stop()
+            self._discard_read_dir()
+        if playing:
+            logs.event("read: stopped")
         self._state()
 
     def _state(self):

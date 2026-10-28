@@ -5,6 +5,8 @@ python.org Python on macOS has no CA bundle, so those checks use certifi when it
 is installed, then curl (the system trust store), and otherwise skip with a warning.
 """
 import os, sys, json, shutil, ssl, subprocess, tempfile, urllib.request
+if not os.environ.get("SAYTRAY_LOG_DIR"):
+    os.environ["SAYTRAY_LOG_DIR"] = tempfile.mkdtemp(prefix="saytray-test-logs-")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from saytray import voices
 

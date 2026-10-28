@@ -10,6 +10,8 @@ _ALIASES = {
     "shift": {"shift", "left shift", "right shift"},
     "windows": {"left windows", "right windows", "windows"},
     "space": {"space", "spacebar"},
+    # The keyboard hook reports VK_OEM_3 as "grave" on Windows. The saved shortcut says "`".
+    "`": {"`", "grave", "oem_3", "oem3", "vk_oem_3", "backtick"},
 }
 
 _CANON = {alias: canon for canon, aliases in _ALIASES.items() for alias in aliases}
@@ -98,3 +100,32 @@ class ChordTracker:
     def reset(self):
         self.down.clear()
         self.holding = False
+
+
+class PressChord:
+    """Fires once when every key of a press shortcut is down. Key-repeat does not refire."""
+
+    def __init__(self, combo):
+        self.required = required_keys(combo)
+        self.down = set()
+        self.fired = False
+
+    def event(self, name, is_down):
+        key = canonical(name)
+        if not key or key not in self.required:
+            return False
+        if is_down:
+            self.down.add(key)
+        else:
+            self.down.discard(key)
+        ready = bool(self.required) and self.required <= self.down
+        if ready and not self.fired:
+            self.fired = True
+            return True
+        if not ready:
+            self.fired = False
+        return False
+
+    def reset(self):
+        self.down.clear()
+        self.fired = False
