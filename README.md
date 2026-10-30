@@ -40,6 +40,12 @@ Two shortcuts are ready. You can change them later in Settings.
 
 The first time you set it up, SayTray downloads two voices (about 170 MB): **Norman**, the default, and **LJSpeech**. More voices are optional and download from inside the app when you want them. After that, it works without the internet.
 
+## 🎬 Promo video (illustrated, made with Grok Bot)
+
+This is a short illustrated promo, not a recording of the app. The pictures above are the real Mac app. Click the image to watch the video.
+
+[![Promo video — click to watch](docs/media/saytray-promo-poster.png)](docs/media/saytray-promo.mp4)
+
 ---
 
 ## Install notes
