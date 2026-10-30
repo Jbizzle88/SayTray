@@ -16,11 +16,11 @@ SayTray is a free app for Windows and Mac. It sits in the system tray on Windows
 - [Windows — SayTray-1.1.0-Windows.zip](https://github.com/Jbizzle88/SayTray/releases/download/v1.1.0/SayTray-1.1.0-Windows.zip)
 - [Mac — SayTray-1.1.0-macOS.zip](https://github.com/Jbizzle88/SayTray/releases/download/v1.1.0/SayTray-1.1.0-macOS.zip)
 
-![SayTray dictating a sentence, then reading the highlighted words aloud](docs/images/saytray-preview.png)
+![Real capture from the Mac app: the SayTray menu open over highlighted text in TextEdit](docs/images/saytray-preview.png)
 
-![Demo: hold Ctrl+Alt+Space to dictate, then press Alt+backtick to hear it in the Norman voice](docs/images/saytray-demo.gif)
+![Real capture from the Mac app: highlight text and press Option+backtick; the menu bar icon switches to a speaker while Norman reads](docs/images/saytray-demo.gif)
 
-The pictures show the Windows shortcuts. On a Mac, hold **Option + Space** to dictate and press **Option + \`** to read.
+These are real captures from the Mac app. They show **Option + \`** (read selected text). While Norman is speaking, the menu bar icon turns into a speaker.
 
 ## How to use
 
